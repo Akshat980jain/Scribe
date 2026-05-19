@@ -315,8 +315,8 @@ function OptionSelect({
     <div className="space-y-2">
       <Label className="text-xs uppercase tracking-wider text-muted-foreground">{label}</Label>
       <Select value={value} onValueChange={onChange} disabled={disabled}>
-        <SelectTrigger className="h-11 rounded-lg border-border bg-background/60">
-          <SelectValue placeholder={value}>{value}</SelectValue>
+        <SelectTrigger className="h-11 rounded-lg border-border bg-background/60 text-foreground">
+          <span className="truncate">{value}</span>
         </SelectTrigger>
         <SelectContent>
           {options.map((o) => (
