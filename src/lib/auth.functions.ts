@@ -111,11 +111,11 @@ export const authenticateUser = createServerFn({ method: "POST" })
 
     if (action === "login") {
       if (!existingUser) {
-        throw new Error("Invalid login credentials");
+        throw new Error("User does not exist");
       }
 
       if (existingUser.passwordHash !== passwordHash) {
-        throw new Error("Invalid login credentials");
+        throw new Error("Incorrect password");
       }
 
       return {

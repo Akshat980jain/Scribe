@@ -19,10 +19,12 @@ function AuthPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const handleEmailSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!email) return;
+    setError(null);
     setStep("password");
   };
 
@@ -30,6 +32,7 @@ function AuthPage() {
     e.preventDefault();
     if (!password) return;
     setLoading(true);
+    setError(null);
 
     try {
       try {
@@ -43,8 +46,8 @@ function AuthPage() {
         toast.success("Successfully logged in!");
         navigate({ to: "/" });
       } catch (signInError: any) {
-        if (signInError.message?.includes("Invalid login credentials")) {
-          // Attempt sign up as fallback
+        // Only automatically sign up if the user does not exist in the database
+        if (signInError.message?.includes("User does not exist")) {
           const res = await authFn({ data: { email, password, action: "signup" } });
           localStorage.setItem("custom_session", JSON.stringify(res.user));
           
@@ -52,12 +55,16 @@ function AuthPage() {
           
           toast.success("Signup successful! You are now logged in.");
           navigate({ to: "/" });
+        } else if (signInError.message?.includes("Incorrect password")) {
+          throw new Error("Incorrect password. Please try again.");
         } else {
           throw signInError;
         }
       }
-    } catch (error: any) {
-      toast.error(error.message || "An error occurred during authentication.");
+    } catch (err: any) {
+      const errMsg = err.message || "An error occurred during authentication.";
+      setError(errMsg);
+      toast.error(errMsg);
     } finally {
       setLoading(false);
     }
@@ -147,9 +154,16 @@ function AuthPage() {
                   type={showPassword ? "text" : "password"}
                   required
                   value={password}
-                  onChange={(e) => setPassword(e.target.value)}
+                  onChange={(e) => {
+                    setPassword(e.target.value);
+                    if (error) setError(null);
+                  }}
                   placeholder="Password"
-                  className="h-14 rounded-xl border-border bg-transparent text-base text-foreground focus-visible:ring-accent placeholder:text-muted-foreground px-4 pr-12"
+                  className={`h-14 rounded-xl bg-transparent text-base text-foreground focus-visible:ring-accent placeholder:text-muted-foreground px-4 pr-12 ${
+                    error 
+                      ? "border-destructive focus-visible:ring-destructive" 
+                      : "border-border"
+                  }`}
                   disabled={loading}
                 />
                 <button
@@ -160,6 +174,12 @@ function AuthPage() {
                   {showPassword ? <EyeOff className="size-5" /> : <Eye className="size-5" />}
                 </button>
               </div>
+
+              {error && (
+                <p className="text-xs text-destructive text-left font-medium px-1 animate-fadeIn">
+                  {error}
+                </p>
+              )}
 
               <Button
                 type="submit"
