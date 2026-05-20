@@ -2,8 +2,43 @@ import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 import fs from "fs";
 import path from "path";
+import { supabaseAdmin } from "@/integrations/supabase/client.server";
 
 const DB_PATH = path.resolve(process.cwd(), "users_db.json");
+
+// Sync a user's profile (display name, email, plan) to the Supabase `profiles` table
+// so it persists across deployments / sandbox resets.
+async function syncProfileToSupabase(u: { id: string; email: string; fullName: string; plan?: string }) {
+  try {
+    await supabaseAdmin
+      .from("profiles")
+      .upsert(
+        {
+          user_id: u.id,
+          email: u.email,
+          full_name: u.fullName,
+          plan: u.plan || "Free",
+        },
+        { onConflict: "user_id" }
+      );
+  } catch (e) {
+    console.error("Failed to sync profile to Supabase:", e);
+  }
+}
+
+async function loadProfileFromSupabase(userId: string) {
+  try {
+    const { data } = await supabaseAdmin
+      .from("profiles")
+      .select("full_name, plan, email")
+      .eq("user_id", userId)
+      .maybeSingle();
+    return data;
+  } catch (e) {
+    console.error("Failed to load profile from Supabase:", e);
+    return null;
+  }
+}
 
 interface Generation {
   id: string;
