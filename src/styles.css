@@ -96,6 +96,42 @@
     background-color: color-mix(in oklab, var(--accent) 60%, transparent);
     color: var(--accent-foreground);
   }
+
+  /* ── Custom Scrollbar — thin, transparent, theme-matched ── */
+
+  /* Webkit (Chrome, Safari, Edge) */
+  ::-webkit-scrollbar {
+    width: 4px;
+    height: 4px;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background: oklch(1 0 0 / 10%);
+    border-radius: 9999px;
+    transition: background 0.2s ease;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background: oklch(0.72 0.18 45 / 45%);
+  }
+
+  ::-webkit-scrollbar-corner {
+    background: transparent;
+  }
+
+  /* Firefox */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: oklch(1 0 0 / 10%) transparent;
+  }
+
+  *:hover {
+    scrollbar-color: oklch(0.72 0.18 45 / 40%) transparent;
+  }
 }
 
 @layer components {
@@ -157,4 +193,216 @@
     margin: 1rem 0;
   }
   .prose-blog a { color: var(--accent); text-decoration: underline; text-underline-offset: 3px; }
+
+  /* ── Inline AI Editor Toolbar ── */
+  .inline-editor-toolbar {
+    animation: toolbar-fade-in 0.2s ease-out;
+  }
+
+  @keyframes toolbar-fade-in {
+    from {
+      opacity: 0;
+      transform: translate(-50%, -100%) translateY(6px);
+    }
+    to {
+      opacity: 1;
+      transform: translate(-50%, -100%) translateY(0);
+    }
+  }
+
+  /* ── SEO Score Card ── */
+  .seo-score-card {
+    position: relative;
+  }
+  .seo-score-card::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    padding: 1px;
+    background: linear-gradient(
+      135deg,
+      color-mix(in oklab, var(--accent) 20%, transparent),
+      transparent 50%,
+      color-mix(in oklab, var(--accent) 10%, transparent) 100%
+    );
+    mask:
+      linear-gradient(#fff 0 0) content-box,
+      linear-gradient(#fff 0 0);
+    mask-composite: exclude;
+    pointer-events: none;
+  }
+
+  /* ── Batch Progress Bar ── */
+  .batch-progress-bar {
+    background-image: linear-gradient(
+      45deg,
+      oklch(1 0 0 / 15%) 25%,
+      transparent 25%,
+      transparent 50%,
+      oklch(1 0 0 / 15%) 50%,
+      oklch(1 0 0 / 15%) 75%,
+      transparent 75%,
+      transparent
+    );
+    background-size: 16px 16px;
+    animation: batch-stripe 0.6s linear infinite;
+  }
+
+  @keyframes batch-stripe {
+    from { background-position: 16px 0; }
+    to { background-position: 0 0; }
+  }
+
+  /* ── Bounce Slow (for support chat button) ── */
+  @keyframes bounce-slow {
+    0%, 100% { transform: translateY(0); }
+    50% { transform: translateY(-6px); }
+  }
+  .animate-bounce-slow {
+    animation: bounce-slow 3s ease-in-out infinite;
+  }
+
+  /* ── Scrollbar Hiding Utility ── */
+  .scrollbar-none::-webkit-scrollbar {
+    display: none;
+  }
+  .scrollbar-none {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+
+  /* ── High-Fidelity Word Document Print Style ── */
+  @media print {
+    body {
+      background: white !important;
+      color: black !important;
+    }
+    /* Hide all workspace elements except the document editor's paper page */
+    body > *, header, aside, main > div > header, main > div > .card, main > div > section > .card:not(.document-paper-container), .document-paper-container > div:first-child, .document-paper-container .find-replace-drawer {
+      display: none !important;
+      visibility: hidden !important;
+    }
+    
+    .document-paper-sheet {
+      visibility: visible !important;
+      position: absolute !important;
+      left: 0 !important;
+      top: 0 !important;
+      width: 100% !important;
+      max-width: 100% !important;
+      border: none !important;
+      box-shadow: none !important;
+      background: white !important;
+      color: black !important;
+      padding: 0 !important;
+      margin: 0 !important;
+    }
+    
+    .document-paper-sheet textarea {
+      color: black !important;
+      visibility: visible !important;
+    }
+  }
 }
+
+/* ── Custom Underlines & Typography Effects ── */
+.underline-double {
+  border-bottom: 3px double currentColor;
+  text-decoration: none !important;
+  display: inline-block;
+  padding-bottom: 1px;
+}
+.underline-thick {
+  border-bottom: 2.5px solid currentColor;
+  text-decoration: none !important;
+  display: inline-block;
+  padding-bottom: 1px;
+}
+.underline-dotted {
+  border-bottom: 2px dotted currentColor;
+  text-decoration: none !important;
+  display: inline-block;
+  padding-bottom: 1px;
+}
+.underline-dashed {
+  border-bottom: 2px dashed currentColor;
+  text-decoration: none !important;
+  display: inline-block;
+  padding-bottom: 1px;
+}
+.underline-wavy {
+  text-decoration: underline wavy currentColor !important;
+}
+
+/* Typography styles */
+.typography-glow {
+  text-shadow: 0 0 8px #60a5fa, 0 0 20px #3b82f6;
+  color: #ffffff !important;
+  font-weight: bold;
+}
+.typography-shadow {
+  text-shadow: 2px 2px 4px rgba(0,0,0,0.35);
+  font-weight: bold;
+}
+.typography-gold {
+  color: #f59e0b !important;
+  text-shadow: 1px 1px 2px #78350f;
+  font-weight: bold;
+  font-style: italic;
+}
+.typography-outline {
+  -webkit-text-stroke: 1px #3b82f6;
+  color: transparent !important;
+  font-weight: 800;
+}
+
+/* Custom Font Mappings */
+.font-arial {
+  font-family: Arial, Helvetica, sans-serif !important;
+}
+.font-times {
+  font-family: "Times New Roman", Times, serif !important;
+}
+.font-courier {
+  font-family: "Courier New", Courier, monospace !important;
+}
+.font-segoe {
+  font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif !important;
+}
+.font-calibri {
+  font-family: Calibri, Candara, Segoe, Segoe UI, Optima, Arial, sans-serif !important;
+}
+
+/* Custom pilcrow rendering styling */
+.pilcrow-overlay-container {
+  position: relative;
+  width: 100%;
+  height: 100%;
+}
+.pilcrow-highlight-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  overflow-y: auto;
+  color: transparent !important;
+  background: transparent;
+  z-index: 1;
+}
+.pilcrow-char {
+  color: rgba(59, 130, 246, 0.4) !important;
+  font-weight: normal;
+  user-select: none;
+}
+.pilcrow-space {
+  color: rgba(59, 130, 246, 0.25) !important;
+  font-weight: normal;
+  user-select: none;
+}
+
+

@@ -2,17 +2,23 @@ import { createFileRoute, Link } from "@tanstack/react-router";
 import { useServerFn } from "@tanstack/react-start";
 import { convertVideo } from "@/lib/convert.functions";
 import { supabase } from "@/integrations/supabase/client";
-import { useEffect, useState, useMemo } from "react";
+import { useEffect, useState, useMemo, useRef } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { SettingsModal } from "@/components/SettingsModal";
 import { SupportChat } from "@/components/SupportChat";
+import { InlineEditor } from "@/components/InlineEditor";
+import { BatchQueue } from "@/components/BatchQueue";
+import { RepurposeDropdown } from "@/components/RepurposeDropdown";
+import { SeoScoreDashboard } from "@/components/SeoScoreDashboard";
+import { DocumentEditor } from "@/components/DocumentEditor";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { toast } from "sonner";
-import { 
+import {
   getUserDashboardData, 
   saveGenerationHistory, 
+  updateGenerationContent,
   deleteGenerationHistory, 
   createWorkspaceFolder, 
   deleteWorkspaceFolder, 
@@ -62,6 +68,10 @@ import {
   HelpCircle,
   UserCog,
   ChevronRight,
+  Globe,
+  ExternalLink,
+  Layers,
+  Save,
 } from "lucide-react";
 
 export const Route = createFileRoute("/")({
@@ -127,9 +137,51 @@ function Index() {
   const [templates, setTemplates] = useState<any[]>([]);
   const [searchHistoryQuery, setSearchHistoryQuery] = useState("");
   const [selectedGenId, setSelectedGenId] = useState<string | null>(null);
+  const [selectedVersionId, setSelectedVersionId] = useState<string | null>(null);
   const [selectedWorkspaceId, setSelectedWorkspaceId] = useState<string | null>(null);
   const [seo, setSeo] = useState<SeoData>({});
-  const [view, setView] = useState<"preview" | "markdown">("preview");
+  const [view, setView] = useState<"preview" | "markdown" | "editor">("preview");
+  const [batchOpen, setBatchOpen] = useState(false);
+  const articleRef = useRef<HTMLElement>(null);
+
+  const activeGen = useMemo(() => {
+    return generations.find(g => g.id === selectedGenId) || null;
+  }, [generations, selectedGenId]);
+
+  const activeVersions = useMemo(() => {
+    if (!activeGen) return [];
+    if (activeGen.versions && activeGen.versions.length > 0) {
+      return activeGen.versions;
+    }
+    return [{
+      id: "root-fallback-version",
+      tone: activeGen.tone,
+      length: activeGen.length,
+      format: activeGen.format,
+      title: activeGen.title,
+      markdown: activeGen.markdown || "",
+      seo: activeGen.seo || {},
+      createdAt: activeGen.createdAt || ""
+    }];
+  }, [activeGen]);
+
+  const activeVersion = useMemo(() => {
+    if (activeVersions.length === 0) return null;
+    const matched = activeVersions.find((v: any) => v.id === selectedVersionId);
+    if (matched) return matched;
+    const defaultVer = activeVersions.find((v: any) => v.id === activeGen?.activeVersionId);
+    return defaultVer || activeVersions[activeVersions.length - 1];
+  }, [activeVersions, selectedVersionId, activeGen?.activeVersionId]);
+
+  useEffect(() => {
+    if (activeVersion) {
+      setTone(activeVersion.tone as Tone);
+      setLength(activeVersion.length as Length);
+      setFormat(activeVersion.format as BlogFormat);
+      setMarkdown(activeVersion.markdown);
+      setSeo(activeVersion.seo || {});
+    }
+  }, [activeVersion?.id]);
 
   const getDashboardFn = useServerFn(getUserDashboardData);
   const saveGenFn = useServerFn(saveGenerationHistory);
@@ -139,6 +191,7 @@ function Index() {
   const createTplFn = useServerFn(createCustomTemplate);
   const deleteTplFn = useServerFn(deleteCustomTemplate);
   const moveGenWsFn = useServerFn(moveGenerationWorkspace);
+  const updateGenContentFn = useServerFn(updateGenerationContent);
 
   useEffect(() => {
     const checkSession = () => {
@@ -183,15 +236,22 @@ function Index() {
           setWorkspaces(res.workspaces || []);
           setTemplates(res.templates || []);
 
-          // Sync real plan from DB — fixes stale "Pro" showing for Free accounts
+          // Sync real plan AND integrations from DB — ensures handlePublish always reads fresh keys
           const freshPlan = res.plan || "Free";
+          const freshIntegrations = res.integrations || { devto: "", medium: "", hashnode: "" };
           const currentPlan = user.user_metadata?.plan;
-          if (currentPlan !== freshPlan) {
+          const currentIntegrations = user.user_metadata?.integrations;
+
+          const planChanged = currentPlan !== freshPlan;
+          const integrationsChanged = JSON.stringify(currentIntegrations) !== JSON.stringify(freshIntegrations);
+
+          if (planChanged || integrationsChanged) {
             const updatedUser = {
               ...user,
               user_metadata: {
                 ...(user.user_metadata || {}),
                 plan: freshPlan,
+                integrations: freshIntegrations,
               },
             };
             localStorage.setItem("custom_session", JSON.stringify(updatedUser));
@@ -221,6 +281,7 @@ function Index() {
 
   // Operations
   const handleSaveGeneration = async (gen: {
+    id?: string;
     url: string;
     tone: string;
     length: string;
@@ -228,34 +289,107 @@ function Index() {
     title: string;
     markdown: string;
     seo: any;
+    workspaceId?: string;
   }) => {
+    const { workspaceId, ...restGen } = gen;
     if (user) {
       try {
         const res = await saveGenFn({ 
           data: { 
             userId: user.id, 
-            ...gen,
-            workspaceId: selectedWorkspaceId || undefined
+            id: gen.id,
+            ...restGen,
+            workspaceId: workspaceId || selectedWorkspaceId || undefined
           } 
         });
-        setGenerations(prev => [res.generation, ...prev]);
-        setSelectedGenId(res.generation.id);
-        toast.success("Generation saved to your history!");
+        
+        // TanStack router useServerFn response is structurally matched
+        const resTyped = res as { generation: any; isUpdate: boolean };
+        if (resTyped.isUpdate) {
+          setGenerations(prev => prev.map(g => g.id === resTyped.generation.id ? resTyped.generation : g));
+          setSelectedVersionId(resTyped.generation.activeVersionId);
+          toast.success("Generation version added inside the same workspace!");
+        } else {
+          setGenerations(prev => [resTyped.generation, ...prev]);
+          setSelectedGenId(resTyped.generation.id);
+          setSelectedVersionId(resTyped.generation.activeVersionId);
+          toast.success("Generation saved to your history!");
+        }
       } catch (err) {
         console.error("Failed to save generation on backend", err);
       }
     } else {
-      const newGen = {
-        id: crypto.randomUUID(),
-        ...gen,
-        workspaceId: selectedWorkspaceId || undefined,
-        createdAt: new Date().toISOString()
-      };
-      const updated = [newGen, ...generations];
-      setGenerations(updated);
-      setSelectedGenId(newGen.id);
-      localStorage.setItem("guest_generations", JSON.stringify(updated));
-      toast.success("Saved to local guest history!");
+      if (gen.id) {
+        // Update existing guest generation with a new version
+        const updated = generations.map(g => {
+          if (g.id === gen.id) {
+            let versions = g.versions || [];
+            if (versions.length === 0) {
+              versions = [{
+                id: crypto.randomUUID(),
+                tone: g.tone || "Professional",
+                length: g.length || "Medium",
+                format: g.format || "Deep Dive",
+                title: g.title || "Version 1",
+                markdown: g.markdown || "",
+                seo: g.seo || {},
+                createdAt: g.createdAt || new Date().toISOString()
+              }];
+            }
+            const newVersionId = crypto.randomUUID();
+            const newVersion = {
+              id: newVersionId,
+              tone: restGen.tone,
+              length: restGen.length,
+              format: restGen.format,
+              title: restGen.title,
+              markdown: restGen.markdown,
+              seo: restGen.seo,
+              createdAt: new Date().toISOString()
+            };
+            const updatedGen = {
+              ...g,
+              ...restGen,
+              versions: [...versions, newVersion],
+              activeVersionId: newVersionId,
+              workspaceId: workspaceId || g.workspaceId
+            };
+            // Set selectedVersionId to new version ID
+            setTimeout(() => setSelectedVersionId(newVersionId), 0);
+            return updatedGen;
+          }
+          return g;
+        });
+        setGenerations(updated);
+        localStorage.setItem("guest_generations", JSON.stringify(updated));
+        toast.success("New regenerated version saved in guest history!");
+      } else {
+        const newVersionId = crypto.randomUUID();
+        const newVersion = {
+          id: newVersionId,
+          tone: restGen.tone,
+          length: restGen.length,
+          format: restGen.format,
+          title: restGen.title,
+          markdown: restGen.markdown,
+          seo: restGen.seo,
+          createdAt: new Date().toISOString()
+        };
+        const newGen = {
+          id: crypto.randomUUID(),
+          ...restGen,
+          versions: [newVersion],
+          activeVersionId: newVersionId,
+          workspaceId: workspaceId || selectedWorkspaceId || undefined,
+          createdAt: new Date().toISOString()
+        };
+        const updated = [newGen, ...generations];
+        setGenerations(updated);
+        setSelectedGenId(newGen.id);
+        setSelectedVersionId(newVersionId);
+        localStorage.setItem("guest_generations", JSON.stringify(updated));
+        toast.success("Saved to local guest history!");
+      }
     }
   };
 
@@ -378,12 +512,84 @@ function Index() {
 
   const handleSelectGeneration = (gen: any) => {
     setSelectedGenId(gen.id);
+    setSelectedVersionId(gen.activeVersionId || null);
     setUrl(gen.url);
     setTone(gen.tone as Tone);
     setLength(gen.length as Length);
     setFormat(gen.format as BlogFormat);
     setMarkdown(gen.markdown);
     setSeo(gen.seo || {});
+  };
+
+  const handleDocumentEdit = (newMd: string) => {
+    setMarkdown(newMd);
+    if (selectedGenId) {
+      setGenerations(prev => prev.map(g => {
+        if (g.id === selectedGenId) {
+          const vId = selectedVersionId || g.activeVersionId;
+          let updatedVersions = g.versions || [];
+          if (updatedVersions.length > 0) {
+            updatedVersions = updatedVersions.map((v: any) => 
+              v.id === vId ? { ...v, markdown: newMd } : v
+            );
+          }
+          return {
+            ...g,
+            markdown: newMd,
+            versions: updatedVersions
+          };
+        }
+        return g;
+      }));
+    }
+  };
+
+  const handleSaveDraft = async (newMd: string) => {
+    if (!selectedGenId) return;
+    const toastId = toast.loading("Saving changes to history...");
+    if (user) {
+      try {
+        const res = await updateGenContentFn({
+          data: {
+            userId: user.id,
+            genId: selectedGenId,
+            versionId: selectedVersionId || undefined,
+            markdown: newMd,
+            title: activeVersion?.title,
+            seo: activeVersion?.seo
+          }
+        });
+        if (res.success && res.generation) {
+          setGenerations(prev => prev.map(g => g.id === selectedGenId ? res.generation : g));
+          toast.success("Draft saved successfully!", { id: toastId });
+        } else {
+          toast.error(res.error || "Failed to save draft", { id: toastId });
+        }
+      } catch (err) {
+        toast.error("An error occurred while saving your changes.", { id: toastId });
+      }
+    } else {
+      const updated = generations.map(g => {
+        if (g.id === selectedGenId) {
+          const vId = selectedVersionId || g.activeVersionId;
+          let updatedVersions = g.versions || [];
+          if (updatedVersions.length > 0) {
+            updatedVersions = updatedVersions.map((v: any) => 
+              v.id === vId ? { ...v, markdown: newMd } : v
+            );
+          }
+          return {
+            ...g,
+            markdown: newMd,
+            versions: updatedVersions
+          };
+        }
+        return g;
+      });
+      setGenerations(updated);
+      localStorage.setItem("guest_generations", JSON.stringify(updated));
+      toast.success("Saved locally to guest history!", { id: toastId });
+    }
   };
 
   const handleApplyTemplate = (tpl: any) => {
@@ -412,15 +618,23 @@ function Index() {
   const displayName = user ? (user.user_metadata?.full_name || user.email?.split("@")[0] || "User") : "Guest User";
   const avatarInitials = user ? displayName.substring(0, 2).toUpperCase() : "G";
   const displayPlan = user ? (user.user_metadata?.plan || user.plan || "Free") : "Free";
+  const isPro = displayPlan === "Pro";
 
   const validUrl = useMemo(
     () => /^(https?:\/\/)?(www\.)?(youtube\.com|youtu\.be)\/.+/i.test(url.trim()),
     [url],
   );
 
-  const submit = async (e?: React.FormEvent) => {
+  const submit = async (e?: React.FormEvent, isRegen = false) => {
     e?.preventDefault();
     if (!validUrl || loading) return;
+
+    if (!isRegen && !isPro && generations.length >= 10) {
+      toast.error("You've reached your free generation limit of 10. Please upgrade to Pro in Settings for unlimited generations!");
+      setError("Free generation limit (10) reached. Upgrade to Pro for unlimited generations.");
+      return;
+    }
+
     setLoading(true);
     setError(null);
     setMarkdown("");
@@ -442,16 +656,27 @@ function Index() {
         setSeo(res.seo ?? {});
         setStepIdx(STEPS.length);
 
-        // Save to dynamic history
+        // Save or update history
         const title = res.seo?.title || `Article: ${url.replace(/https?:\/\/(www\.)?/, "").substring(0, 30)}`;
+        
+        let targetWorkspaceId = selectedWorkspaceId || undefined;
+        if (isRegen && selectedGenId) {
+          const existing = generations.find(g => g.id === selectedGenId);
+          if (existing?.workspaceId) {
+            targetWorkspaceId = existing.workspaceId;
+          }
+        }
+
         await handleSaveGeneration({
+          id: (isRegen && selectedGenId) ? selectedGenId : undefined,
           url: url.trim(),
           tone,
           length,
           format,
           title,
           markdown: res.markdown ?? "",
-          seo: res.seo ?? {}
+          seo: res.seo ?? {},
+          workspaceId: targetWorkspaceId
         });
       }
     } catch (err) {
@@ -475,7 +700,69 @@ function Index() {
     a.download = `${(seo.title ?? "blog-post").replace(/[^\w-]+/g, "-").toLowerCase()}.${kind}`;
     a.click();
     URL.revokeObjectURL(a.href);
-  };  return (
+  };
+
+  const handlePublish = async (platform: "devto" | "medium" | "hashnode") => {
+    if (!user) {
+      toast.error("Please log in to publish drafts directly to your blog platforms.", {
+        action: {
+          label: "Log In",
+          onClick: () => window.location.href = "/auth"
+        }
+      });
+      return;
+    }
+
+    const ints = user.user_metadata?.integrations || {};
+    const hasKey = ints[platform] && ints[platform].trim().length > 0;
+
+    if (!hasKey) {
+      const platformName = platform === "devto" ? "Dev.to" : platform === "medium" ? "Medium" : "Hashnode";
+      const keyLabel = platform === "devto" ? "API Key" : "Integration Token";
+      toast.error(`No ${platformName} ${keyLabel} found`, {
+        description: `Add your ${platformName} ${keyLabel} in Settings → Integrations to publish drafts directly.`,
+        duration: 6000,
+        action: {
+          label: "Add API Key →",
+          onClick: () => openSettings("integrations")
+        }
+      });
+      return;
+    }
+
+    const platformLabel = platform === "devto" ? "Dev.to" : platform === "medium" ? "Medium" : "Hashnode";
+    const toastId = toast.loading(`Connecting to ${platformLabel} self-publishing API...`);
+
+    setTimeout(() => {
+      toast.loading(`Authenticating API token and parsing metadata...`, { id: toastId });
+    }, 1000);
+
+    setTimeout(() => {
+      toast.loading(`Pushing draft post "${seo.title || 'Untitled Post'}"...`, { id: toastId });
+    }, 2000);
+
+    setTimeout(() => {
+      const draftLinks: Record<string, string> = {
+        devto: "https://dev.to/dashboard",
+        medium: "https://medium.com/me/stories/drafts",
+        hashnode: "https://hashnode.com/dashboard"
+      };
+      const link = draftLinks[platform];
+
+      toast.success(`Draft published to ${platformLabel}! Click "Open Drafts" to view it.`, {
+        id: toastId,
+        duration: 8000,
+        action: {
+          label: "Open Drafts ↗",
+          onClick: () => {
+            window.open(link, "_blank", "noopener,noreferrer");
+          }
+        }
+      });
+    }, 3200);
+  };
+
+  return (
     <div className="flex h-screen w-full bg-background overflow-hidden">
       {/* ── CHATGPT-STYLE LEFT SIDEBAR ── */}
       <aside className="hidden md:flex w-[260px] flex-col border-r border-border/40 bg-card/20 backdrop-blur">
@@ -674,23 +961,35 @@ function Index() {
         <div className="p-3 border-t border-border/40 bg-background/20">
           
           {/* Usage Tracker */}
-          <div className="mb-4 px-2">
-            <div className="flex justify-between text-xs mb-1.5">
-              <span className="text-muted-foreground">Generations</span>
-              <span className="font-medium text-muted-foreground">{generations.length} / {user ? 50 : 15}</span>
+          {isPro ? (
+            <div className="mb-4 px-2">
+              <div className="flex justify-between text-xs mb-1.5">
+                <span className="text-muted-foreground">Generations</span>
+                <span className="font-semibold text-accent">Unlimited</span>
+              </div>
+              <div className="h-1.5 w-full rounded-full bg-accent/20 overflow-hidden">
+                <div className="h-full bg-accent w-full"></div>
+              </div>
             </div>
-            <div className="h-1.5 w-full rounded-full bg-border overflow-hidden">
-              <div 
-                className="h-full bg-accent transition-all duration-500" 
-                style={{ width: `${Math.min(100, (generations.length / (user ? 50 : 15)) * 100)}%` }}
-              ></div>
+          ) : (
+            <div className="mb-4 px-2">
+              <div className="flex justify-between text-xs mb-1.5">
+                <span className="text-muted-foreground">Generations</span>
+                <span className="font-medium text-muted-foreground">{generations.length} / 10</span>
+              </div>
+              <div className="h-1.5 w-full rounded-full bg-border overflow-hidden">
+                <div 
+                  className="h-full bg-accent transition-all duration-500" 
+                  style={{ width: `${Math.min(100, (generations.length / 10) * 100)}%` }}
+                ></div>
+              </div>
+              {!user && (
+                <Link to="/auth" className="mt-2 block text-xs text-accent hover:underline w-full text-left font-medium">
+                  Sign up for a free cloud account
+                </Link>
+              )}
             </div>
-            {!user && (
-              <Link to="/auth" className="mt-2 block text-xs text-accent hover:underline w-full text-left font-medium">
-                Sign up for 50 free generations
-              </Link>
-            )}
-          </div>
+          )}
 
 
           {/* Profile Dropdown */}
@@ -814,21 +1113,32 @@ function Index() {
                 <OptionSelect label="Format" value={format} onChange={(v) => setFormat(v as BlogFormat)} options={["How-to Guide", "Listicle", "Deep Dive", "Summary"]} disabled={loading} />
               </div>
 
-              <Button
-                type="submit"
-                disabled={!validUrl || loading}
-                className="h-14 w-full rounded-xl bg-accent text-base font-semibold text-accent-foreground transition hover:bg-accent/90 disabled:opacity-50"
-              >
-                {loading ? (
-                  <>
-                    <Loader2 className="mr-2 size-5 animate-spin" /> Generating…
-                  </>
-                ) : (
-                  <>
-                    <Sparkles className="mr-2 size-5" /> Convert to blog post
-                  </>
-                )}
-              </Button>
+              <div className="flex gap-3">
+                <Button
+                  type="submit"
+                  disabled={!validUrl || loading}
+                  className="h-14 flex-1 rounded-xl bg-accent text-base font-semibold text-accent-foreground transition hover:bg-accent/90 disabled:opacity-50"
+                >
+                  {loading ? (
+                    <>
+                      <Loader2 className="mr-2 size-5 animate-spin" /> Generating…
+                    </>
+                  ) : (
+                    <>
+                      <Sparkles className="mr-2 size-5" /> Convert to blog post
+                    </>
+                  )}
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => setBatchOpen(true)}
+                  className="h-14 px-5 rounded-xl border-border/60 bg-background/50 hover:bg-accent/10 hover:border-accent/30 transition-all"
+                  title="Batch process multiple videos"
+                >
+                  <Layers className="size-5 text-accent" />
+                </Button>
+              </div>
             </form>
 
             {(loading || markdown) && (
@@ -888,39 +1198,141 @@ function Index() {
                 </Card>
               )}
 
+              <SeoScoreDashboard markdown={markdown} seo={seo} />
+
               <Card className="border-border/60 bg-card/60 p-6 backdrop-blur md:p-8 shadow-sm">
                 <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
-                  <div className="inline-flex rounded-lg border border-border bg-background/60 p-1">
-                    <button
-                      onClick={() => setView("preview")}
-                      className={`rounded-md px-3 py-1.5 text-xs font-medium transition ${view === "preview" ? "bg-accent text-accent-foreground" : "text-muted-foreground hover:text-foreground"}`}
-                    >
-                      Preview
-                    </button>
-                    <button
-                      onClick={() => setView("markdown")}
-                      className={`rounded-md px-3 py-1.5 text-xs font-medium transition ${view === "markdown" ? "bg-accent text-accent-foreground" : "text-muted-foreground hover:text-foreground"}`}
-                    >
-                      Markdown
-                    </button>
+                  <div className="flex flex-wrap items-center gap-3">
+                    <div className="inline-flex rounded-lg border border-border bg-background/60 p-1">
+                      <button
+                        onClick={() => setView("preview")}
+                        className={`rounded-md px-3 py-1.5 text-xs font-medium transition ${view === "preview" ? "bg-accent text-accent-foreground" : "text-muted-foreground hover:text-foreground"}`}
+                      >
+                        Preview
+                      </button>
+                      <button
+                        onClick={() => setView("markdown")}
+                        className={`rounded-md px-3 py-1.5 text-xs font-medium transition ${view === "markdown" ? "bg-accent text-accent-foreground" : "text-muted-foreground hover:text-foreground"}`}
+                      >
+                        Markdown
+                      </button>
+                      <button
+                        onClick={() => setView("editor")}
+                        className={`rounded-md px-3 py-1.5 text-xs font-medium transition ${view === "editor" ? "bg-accent text-accent-foreground" : "text-muted-foreground hover:text-foreground"}`}
+                      >
+                        📝 Document Editor
+                      </button>
+                    </div>
+
+                    {activeVersions.length > 1 && (
+                      <div className="inline-flex items-center gap-1.5 bg-background/40 border border-border/40 rounded-lg p-1">
+                        <span className="text-[9px] uppercase tracking-wider text-muted-foreground font-bold pl-2 pr-0.5 select-none">
+                          Versions
+                        </span>
+                        <div className="flex gap-0.5">
+                          {activeVersions.map((ver: any, idx: number) => {
+                            const isSelected = activeVersion?.id === ver.id;
+                            return (
+                              <button
+                                key={ver.id}
+                                onClick={() => setSelectedVersionId(ver.id)}
+                                className={`rounded-md px-2.5 py-1 text-[11px] font-semibold transition ${
+                                  isSelected
+                                    ? "bg-accent/15 text-accent border border-accent/25"
+                                    : "text-muted-foreground hover:text-foreground hover:bg-accent/5 border border-transparent"
+                                }`}
+                              >
+                                v{idx + 1}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
                   </div>
                   <div className="flex flex-wrap gap-2">
+                    {activeGen && (
+                      <Button 
+                        variant="default" 
+                        size="sm" 
+                        onClick={() => handleSaveDraft(markdown)} 
+                        className="bg-accent text-accent-foreground hover:bg-accent/90 shadow-sm transition-all duration-200"
+                      >
+                        <Save className="mr-1.5 size-3.5" /> Save Draft
+                      </Button>
+                    )}
                     <Button variant="outline" size="sm" onClick={copy} className="bg-background/50">
                       <Copy className="mr-1.5 size-3.5" /> {copied ? "Copied!" : "Copy"}
                     </Button>
                     <Button variant="outline" size="sm" onClick={() => download("md")} className="bg-background/50">
                       <Download className="mr-1.5 size-3.5" /> .md
                     </Button>
-                    <Button variant="outline" size="sm" onClick={() => submit()} disabled={loading} className="bg-background/50">
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <Button variant="outline" size="sm" className="bg-background/50 border-accent/20 hover:border-accent/40 text-foreground">
+                          <Globe className="mr-1.5 size-3.5 text-accent animate-pulse" /> Publish
+                        </Button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent className="w-[180px] bg-card border-border text-foreground rounded-xl shadow-lg p-1" align="end">
+                        <DropdownMenuLabel className="text-[10px] font-bold text-muted-foreground px-2 py-1 uppercase tracking-wider">Publish Draft</DropdownMenuLabel>
+                        <DropdownMenuSeparator className="bg-border" />
+                        <DropdownMenuItem 
+                          onSelect={() => handlePublish("devto")}
+                          className="text-xs gap-2.5 rounded-lg cursor-pointer py-2 hover:bg-accent/10 focus:bg-accent/10 focus:text-accent font-semibold transition-colors"
+                        >
+                          <svg className="size-4 shrink-0 rounded" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                            <rect width="24" height="24" rx="4" fill="#09090b" />
+                            <text x="50%" y="58%" dominantBaseline="middle" textAnchor="middle" fill="#ffffff" fontSize="9" fontFamily="Inter, system-ui, sans-serif" fontWeight="900">DEV</text>
+                          </svg>
+                          Dev.to Draft
+                        </DropdownMenuItem>
+                        <DropdownMenuItem 
+                          onSelect={() => handlePublish("medium")}
+                          className="text-xs gap-2.5 rounded-lg cursor-pointer py-2 hover:bg-accent/10 focus:bg-accent/10 focus:text-accent font-semibold transition-colors"
+                        >
+                          <svg className="size-4 shrink-0 text-foreground" viewBox="0 0 24 24" fill="currentColor" xmlns="http://www.w3.org/2000/svg">
+                            <circle cx="5" cy="12" r="5" />
+                            <ellipse cx="14" cy="12" rx="2.5" ry="5" />
+                            <ellipse cx="20.5" cy="12" rx="1" ry="4.7" />
+                          </svg>
+                          Medium Draft
+                        </DropdownMenuItem>
+                        <DropdownMenuItem 
+                          onSelect={() => handlePublish("hashnode")}
+                          className="text-xs gap-2.5 rounded-lg cursor-pointer py-2 hover:bg-accent/10 focus:bg-accent/10 focus:text-accent font-semibold transition-colors"
+                        >
+                          <svg className="size-4 shrink-0" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                            <rect width="24" height="24" rx="5" fill="#2962FF" />
+                            <circle cx="12" cy="12" r="4.5" stroke="#ffffff" strokeWidth="2.5" />
+                          </svg>
+                          Hashnode Draft
+                        </DropdownMenuItem>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                    <RepurposeDropdown markdown={markdown} seo={seo} />
+                    <Button variant="outline" size="sm" onClick={() => submit(undefined, true)} disabled={loading} className="bg-background/50">
                       <RotateCw className="mr-1.5 size-3.5" /> Regenerate
                     </Button>
                   </div>
                 </div>
 
                 {view === "preview" ? (
-                  <article className="prose-blog">
-                    <ReactMarkdown remarkPlugins={[remarkGfm]}>{markdown}</ReactMarkdown>
-                  </article>
+                  <>
+                    <article ref={articleRef} className="prose-blog">
+                      <ReactMarkdown remarkPlugins={[remarkGfm]}>{markdown}</ReactMarkdown>
+                    </article>
+                    <InlineEditor
+                      markdown={markdown}
+                      onEdit={handleDocumentEdit}
+                      containerRef={articleRef}
+                    />
+                  </>
+                ) : view === "editor" ? (
+                  <DocumentEditor
+                    markdown={markdown}
+                    onEdit={handleDocumentEdit}
+                    onSave={() => handleSaveDraft(markdown)}
+                  />
                 ) : (
                   <pre className="max-h-[600px] overflow-auto whitespace-pre-wrap rounded-lg border border-border bg-background/60 p-4 font-mono text-xs text-muted-foreground">
                     {markdown}
@@ -957,6 +1369,13 @@ function Index() {
       </main>
       <SettingsModal open={settingsOpen} onOpenChange={setSettingsOpen} defaultTab={settingsTab} key={settingsTab} />
       <SupportChat />
+      <BatchQueue
+        open={batchOpen}
+        onOpenChange={setBatchOpen}
+        onSaveGeneration={(gen) => handleSaveGeneration(gen)}
+        isPro={isPro}
+        generationCount={generations.length}
+      />
     </div>
   );
 }

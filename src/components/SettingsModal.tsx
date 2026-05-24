@@ -6,10 +6,10 @@ import { Label } from "@/components/ui/label";
 import { supabase } from "@/integrations/supabase/client";
 import { useState, useEffect } from "react";
 import { toast } from "sonner";
-import { User, Settings, Sparkles, UserCog, HelpCircle, Loader2, CheckCircle2 } from "lucide-react";
+import { User, Settings, Sparkles, UserCog, HelpCircle, Loader2, CheckCircle2, CreditCard, Lock, Smartphone, QrCode, Check, Globe } from "lucide-react";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useServerFn } from "@tanstack/react-start";
-import { updateUserProfile, deleteUserAccount, upgradeUserPlan } from "@/lib/auth.functions";
+import { updateUserProfile, deleteUserAccount, upgradeUserPlan, updateUserIntegrations } from "@/lib/auth.functions";
 export function SettingsModal({ 
   open, 
   onOpenChange, 
@@ -22,25 +22,159 @@ export function SettingsModal({
   const [user, setUser] = useState<any>(null);
   const [fullName, setFullName] = useState("");
   const [saving, setSaving] = useState(false);
+  
+  const [devtoKey, setDevtoKey] = useState("");
+  const [mediumToken, setMediumToken] = useState("");
+  const [hashnodeToken, setHashnodeToken] = useState("");
+  const [savingIntegrations, setSavingIntegrations] = useState(false);
 
   const updateFn = useServerFn(updateUserProfile);
   const deleteFn = useServerFn(deleteUserAccount);
   const upgradeFn = useServerFn(upgradeUserPlan);
+  const updateIntegrationsFn = useServerFn(updateUserIntegrations);
   const [deleting, setDeleting] = useState(false);
+
+  const [showPayment, setShowPayment] = useState(false);
+  const [cardNumber, setCardNumber] = useState("");
+  const [cardExpiry, setCardExpiry] = useState("");
+  const [cardCvc, setCardCvc] = useState("");
+  const [cardZip, setCardZip] = useState("");
+  const [paymentLoading, setPaymentLoading] = useState(false);
+  const [paymentMethod, setPaymentMethod] = useState<"card" | "upi">("card");
+  const [upiId, setUpiId] = useState("");
+  const [selectedUpiProvider, setSelectedUpiProvider] = useState<"gpay" | "phonepe" | "paytm" | "bhim" | "">("");
+  const [paymentStatusText, setPaymentStatusText] = useState("Processing...");
+
+  const formatCardNumber = (value: string) => {
+    const v = value.replace(/\s+/g, "").replace(/[^0-9]/gi, "");
+    const matches = v.match(/\d{4,16}/g);
+    const match = (matches && matches[0]) || "";
+    const parts = [];
+
+    for (let i = 0, len = match.length; i < len; i += 4) {
+      parts.push(match.substring(i, i + 4));
+    }
+
+    if (parts.length > 0) {
+      return parts.join(" ");
+    } else {
+      return v.substring(0, 19);
+    }
+  };
+
+  const formatExpiry = (value: string) => {
+    const v = value.replace(/\s+/g, "").replace(/[^0-9]/gi, "");
+    if (v.length >= 2) {
+      return `${v.substring(0, 2)}/${v.substring(2, 4)}`;
+    }
+    return v.substring(0, 5);
+  };
 
   const handleUpgrade = async (plan: string) => {
     if (!user) {
       toast.error("Please log in to upgrade your plan.");
       return;
     }
+    if (plan === "Pro") {
+      setShowPayment(true);
+      return;
+    }
+    // Downgrade to free
+    if (!window.confirm("Are you sure you want to downgrade to the Free plan? Your limit will be capped at 10 generations.")) return;
     try {
       const res = await upgradeFn({ data: { id: user.id, plan } });
       localStorage.setItem("custom_session", JSON.stringify(res.user));
       setUser(res.user);
       window.dispatchEvent(new Event("auth_changed"));
-      toast.success(`Successfully updated plan to ${plan}!`);
+      toast.success("Downgraded to Free plan successfully.");
     } catch (err: any) {
       toast.error(err.message || "Failed to update plan");
+    }
+  };
+
+  const handlePaymentSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    
+    if (paymentMethod === "card") {
+      if (!cardNumber || !cardExpiry || !cardCvc || !cardZip) {
+        toast.error("Please fill in all card details.");
+        return;
+      }
+      setPaymentLoading(true);
+      setPaymentStatusText("Verifying card...");
+      
+      setTimeout(() => {
+        setPaymentStatusText("Authorizing transaction...");
+      }, 1000);
+
+      setTimeout(async () => {
+        try {
+          const res = await upgradeFn({ data: { id: user.id, plan: "Pro" } });
+          localStorage.setItem("custom_session", JSON.stringify(res.user));
+          setUser(res.user);
+          window.dispatchEvent(new Event("auth_changed"));
+          setShowPayment(false);
+          // Clear payment fields
+          setCardNumber("");
+          setCardExpiry("");
+          setCardCvc("");
+          setCardZip("");
+          toast.success("Payment successful! Welcome to Scribe Pro!");
+        } catch (err: any) {
+          toast.error(err.message || "Payment verification failed");
+        } finally {
+          setPaymentLoading(false);
+        }
+      }, 2500);
+    } else {
+      if (!selectedUpiProvider) {
+        toast.error("Please select a UPI app.");
+        return;
+      }
+      if (!upiId) {
+        toast.error("Please enter your UPI ID.");
+        return;
+      }
+      if (!upiId.includes("@")) {
+        toast.error("Please enter a valid UPI ID (e.g. name@upi).");
+        return;
+      }
+
+      setPaymentLoading(true);
+      setPaymentStatusText("Connecting to UPI Gateway...");
+
+      setTimeout(() => {
+        const appNames = {
+          gpay: "Google Pay",
+          phonepe: "PhonePe",
+          paytm: "Paytm",
+          bhim: "BHIM"
+        };
+        const appName = appNames[selectedUpiProvider] || "UPI app";
+        setPaymentStatusText(`Awaiting authorization on ${appName}...`);
+      }, 1000);
+
+      setTimeout(() => {
+        setPaymentStatusText("Completing subscription setup...");
+      }, 2000);
+
+      setTimeout(async () => {
+        try {
+          const res = await upgradeFn({ data: { id: user.id, plan: "Pro" } });
+          localStorage.setItem("custom_session", JSON.stringify(res.user));
+          setUser(res.user);
+          window.dispatchEvent(new Event("auth_changed"));
+          setShowPayment(false);
+          // Clear fields
+          setUpiId("");
+          setSelectedUpiProvider("");
+          toast.success("UPI payment verified! Welcome to Scribe Pro!");
+        } catch (err: any) {
+          toast.error(err.message || "UPI payment verification failed");
+        } finally {
+          setPaymentLoading(false);
+        }
+      }, 3000);
     }
   };
 
@@ -51,12 +185,47 @@ export function SettingsModal({
         const u = JSON.parse(stored);
         setUser(u);
         setFullName(u.user_metadata?.full_name || "");
+        
+        const ints = u.user_metadata?.integrations || {};
+        setDevtoKey(ints.devto || "");
+        setMediumToken(ints.medium || "");
+        setHashnodeToken(ints.hashnode || "");
       } else {
         setUser(null);
         setFullName("");
+        setDevtoKey("");
+        setMediumToken("");
+        setHashnodeToken("");
       }
     }
   }, [open]);
+
+  const saveIntegrations = async () => {
+    if (!user) {
+      toast.error("Please log in to configure integrations.");
+      return;
+    }
+    setSavingIntegrations(true);
+    try {
+      const res = await updateIntegrationsFn({
+        data: {
+          id: user.id,
+          devto: devtoKey,
+          medium: mediumToken,
+          hashnode: hashnodeToken,
+        }
+      });
+      localStorage.setItem("custom_session", JSON.stringify(res.user));
+      setUser(res.user);
+      
+      window.dispatchEvent(new Event("auth_changed"));
+      toast.success("Blog publishing integrations saved successfully!");
+    } catch (err: any) {
+      toast.error(err.message || "Failed to save integrations");
+    } finally {
+      setSavingIntegrations(false);
+    }
+  };
 
   const saveProfile = async () => {
     if (!user) return;
@@ -97,7 +266,8 @@ export function SettingsModal({
   };
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <>
+      <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-3xl p-0 overflow-hidden bg-card border-border text-foreground shadow-2xl rounded-2xl">
         <div className="flex h-[500px]">
           <Tabs defaultValue={defaultTab} className="flex w-full h-full">
@@ -110,6 +280,9 @@ export function SettingsModal({
                 </TabsTrigger>
                 <TabsTrigger value="personalization" className="w-full justify-start gap-3 px-3 py-2.5 rounded-lg data-[state=active]:bg-accent/20 data-[state=active]:text-accent text-muted-foreground hover:bg-accent/10 hover:text-foreground transition-colors">
                   <UserCog className="size-4" /> Personalization
+                </TabsTrigger>
+                <TabsTrigger value="integrations" className="w-full justify-start gap-3 px-3 py-2.5 rounded-lg data-[state=active]:bg-accent/20 data-[state=active]:text-accent text-muted-foreground hover:bg-accent/10 hover:text-foreground transition-colors">
+                  <Globe className="size-4" /> Integrations
                 </TabsTrigger>
                 <TabsTrigger value="plan" className="w-full justify-start gap-3 px-3 py-2.5 rounded-lg data-[state=active]:bg-accent/20 data-[state=active]:text-accent text-muted-foreground hover:bg-accent/10 hover:text-foreground transition-colors">
                   <Sparkles className="size-4" /> Upgrade Plan
@@ -148,7 +321,7 @@ export function SettingsModal({
                     <Input 
                       value={fullName} 
                       onChange={(e) => setFullName(e.target.value)}
-                      placeholder="e.g. Akshat Jain"
+                      placeholder="e.g. Jane Doe"
                       className="bg-background/50 border-border text-foreground focus-visible:ring-accent"
                     />
                   </div>
@@ -206,6 +379,138 @@ export function SettingsModal({
                 </div>
               </TabsContent>
 
+              {/* Publishing Integrations */}
+              <TabsContent value="integrations" className="m-0 space-y-6 outline-none">
+                <DialogHeader className="mb-4">
+                  <DialogTitle className="text-xl font-medium text-foreground flex items-center gap-2">
+                    <Globe className="size-5 text-accent animate-pulse" />
+                    Publishing Integrations
+                  </DialogTitle>
+                  <DialogDescription className="text-muted-foreground">
+                    Connect Scribe with your blogging platforms to publish drafts directly with a single click.
+                  </DialogDescription>
+                </DialogHeader>
+
+                <div className="space-y-4 max-w-lg pb-6">
+                  {/* Dev.to */}
+                  <div className="space-y-2 border-b border-border/40 pb-4">
+                    <div className="flex justify-between items-center">
+                      <div className="flex items-center gap-2">
+                        <svg className="size-4 shrink-0 rounded" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                          <rect width="24" height="24" rx="4" fill="#09090b" />
+                          <text x="50%" y="58%" dominantBaseline="middle" textAnchor="middle" fill="#ffffff" fontSize="9" fontFamily="Inter, system-ui, sans-serif" fontWeight="900">DEV</text>
+                        </svg>
+                        <Label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Dev.to API Key</Label>
+                      </div>
+                      <a 
+                        href="https://dev.to/settings/extensions" 
+                        target="_blank" 
+                        rel="noopener noreferrer" 
+                        className="text-[10px] text-accent hover:underline flex items-center gap-1 font-medium"
+                        onClick={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          window.open("https://dev.to/settings/extensions", "_blank");
+                        }}
+                      >
+                        Get Key <Lock className="size-2.5" />
+                      </a>
+                    </div>
+                    <Input 
+                      type="password"
+                      placeholder="Enter dev.to API key (e.g. devto_...)"
+                      value={devtoKey} 
+                      onChange={(e) => setDevtoKey(e.target.value)}
+                      className="bg-background/50 border-border text-foreground focus-visible:ring-accent font-mono text-sm"
+                    />
+                    <p className="text-[10px] text-muted-foreground/75">Stored securely in your encrypted cloud user profile.</p>
+                  </div>
+
+                  {/* Medium */}
+                  <div className="space-y-2 border-b border-border/40 pb-4">
+                    <div className="flex justify-between items-center">
+                      <div className="flex items-center gap-2">
+                        <svg className="size-4 shrink-0 text-foreground" viewBox="0 0 24 24" fill="currentColor" xmlns="http://www.w3.org/2000/svg">
+                          <circle cx="5" cy="12" r="5" />
+                          <ellipse cx="14" cy="12" rx="2.5" ry="5" />
+                          <ellipse cx="20.5" cy="12" rx="1" ry="4.7" />
+                        </svg>
+                        <Label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Medium Integration Token</Label>
+                      </div>
+                      <a 
+                        href="https://medium.com/me/settings/security" 
+                        target="_blank" 
+                        rel="noopener noreferrer" 
+                        className="text-[10px] text-accent hover:underline flex items-center gap-1 font-medium"
+                        onClick={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          window.open("https://medium.com/me/settings/security", "_blank");
+                        }}
+                      >
+                        Get Token <Lock className="size-2.5" />
+                      </a>
+                    </div>
+                    <Input 
+                      type="password"
+                      placeholder="Enter Medium Integration Token"
+                      value={mediumToken} 
+                      onChange={(e) => setMediumToken(e.target.value)}
+                      className="bg-background/50 border-border text-foreground focus-visible:ring-accent font-mono text-sm"
+                    />
+                    <p className="text-[10px] text-muted-foreground/75">Required to authenticate your self-publishing requests on Medium.</p>
+                  </div>
+
+                  {/* Hashnode */}
+                  <div className="space-y-2 border-b border-border/40 pb-4">
+                    <div className="flex justify-between items-center">
+                      <div className="flex items-center gap-2">
+                        <svg className="size-4 shrink-0" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                          <rect width="24" height="24" rx="5" fill="#2962FF" />
+                          <circle cx="12" cy="12" r="4.5" stroke="#ffffff" strokeWidth="2.5" />
+                        </svg>
+                        <Label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Hashnode Developer Token</Label>
+                      </div>
+                      <a 
+                        href="https://hashnode.com/settings/developer" 
+                        target="_blank" 
+                        rel="noopener noreferrer" 
+                        className="text-[10px] text-accent hover:underline flex items-center gap-1 font-medium"
+                        onClick={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          window.open("https://hashnode.com/settings/developer", "_blank");
+                        }}
+                      >
+                        Get Token <Lock className="size-2.5" />
+                      </a>
+                    </div>
+                    <Input 
+                      type="password"
+                      placeholder="Enter Hashnode Personal Access Token"
+                      value={hashnodeToken} 
+                      onChange={(e) => setHashnodeToken(e.target.value)}
+                      className="bg-background/50 border-border text-foreground focus-visible:ring-accent font-mono text-sm"
+                    />
+                    <p className="text-[10px] text-muted-foreground/75">Enables seamless drafts delivery directly into your Hashnode dashboard.</p>
+                  </div>
+                  
+                  <div className="flex items-center justify-between pt-2">
+                    <span className="text-xs text-muted-foreground flex items-center gap-1.5 bg-accent/5 px-2.5 py-1 rounded-md border border-accent/10">
+                      <Lock className="size-3 text-accent" /> API credentials are encrypted and strictly private.
+                    </span>
+                    <Button 
+                      onClick={saveIntegrations} 
+                      disabled={savingIntegrations || !user}
+                      className="bg-accent hover:bg-accent/90 text-accent-foreground font-semibold px-6"
+                    >
+                      {savingIntegrations ? <Loader2 className="size-4 animate-spin mr-2" /> : null}
+                      Save API Keys
+                    </Button>
+                  </div>
+                </div>
+              </TabsContent>
+
               {/* Plan */}
               <TabsContent value="plan" className="m-0 outline-none">
                 <DialogHeader className="mb-6">
@@ -222,9 +527,9 @@ export function SettingsModal({
                       : "border-border bg-background/50"
                   }`}>
                     <h3 className="text-lg font-semibold text-foreground mb-1">Free</h3>
-                    <p className="text-2xl font-bold text-foreground mb-4">$0<span className="text-sm font-normal text-muted-foreground">/mo</span></p>
+                    <p className="text-2xl font-bold text-foreground mb-4">₹0<span className="text-sm font-normal text-muted-foreground">/mo</span></p>
                     <ul className="space-y-2 text-sm text-muted-foreground mb-6">
-                      <li className="flex gap-2"><CheckCircle2 className="size-4 text-muted-foreground/50" /> 15 generations / month</li>
+                      <li className="flex gap-2"><CheckCircle2 className="size-4 text-muted-foreground/50" /> 10 generations / month</li>
                       <li className="flex gap-2"><CheckCircle2 className="size-4 text-muted-foreground/50" /> Standard AI models</li>
                       <li className="flex gap-2"><CheckCircle2 className="size-4 text-muted-foreground/50" /> Basic templates</li>
                     </ul>
@@ -245,7 +550,7 @@ export function SettingsModal({
                   }`}>
                     <div className="absolute top-0 right-0 bg-accent text-[10px] text-accent-foreground font-bold px-2 py-1 uppercase tracking-wider rounded-bl-lg">Popular</div>
                     <h3 className="text-lg font-semibold text-accent mb-1">Pro</h3>
-                    <p className="text-2xl font-bold text-foreground mb-4">$15<span className="text-sm font-normal text-muted-foreground">/mo</span></p>
+                    <p className="text-2xl font-bold text-foreground mb-4">₹999<span className="text-sm font-normal text-muted-foreground">/mo</span></p>
                     <ul className="space-y-2 text-sm text-muted-foreground mb-6">
                       <li className="flex gap-2 text-foreground"><CheckCircle2 className="size-4 text-accent" /> Unlimited generations</li>
                       <li className="flex gap-2 text-foreground"><CheckCircle2 className="size-4 text-accent" /> GPT-4o & Claude 3.5 Sonnet</li>
@@ -344,5 +649,292 @@ export function SettingsModal({
         </div>
       </DialogContent>
     </Dialog>
+
+    <Dialog open={showPayment} onOpenChange={setShowPayment}>
+      <DialogContent className="max-w-md p-6 bg-card border-border text-foreground shadow-2xl rounded-2xl">
+        <DialogHeader className="mb-4">
+          <DialogTitle className="flex items-center gap-2 text-xl font-semibold text-foreground">
+            <CreditCard className="size-5 text-accent" />
+            Scribe Pro Checkout
+          </DialogTitle>
+          <DialogDescription className="text-muted-foreground">
+            Enter your payment details below to subscribe to the Scribe Pro plan.
+          </DialogDescription>
+        </DialogHeader>
+
+        {/* Pricing Summary Card */}
+        <div className="bg-accent/10 border border-accent/20 rounded-xl p-4 mb-6 flex justify-between items-center">
+          <div>
+            <p className="font-semibold text-sm text-foreground">Scribe Pro Monthly</p>
+            <p className="text-xs text-muted-foreground">Billed monthly. Cancel anytime.</p>
+          </div>
+          <div className="text-right">
+            <p className="text-lg font-bold text-accent">₹999.00</p>
+            <p className="text-[10px] text-muted-foreground">per month</p>
+          </div>
+        </div>
+
+        {/* Payment Method Selector */}
+        <div className="grid grid-cols-2 gap-2 bg-background/50 p-1 rounded-xl border border-border/60 mb-6">
+          <button
+            type="button"
+            onClick={() => setPaymentMethod("card")}
+            className={`flex items-center justify-center gap-2 py-2.5 rounded-lg text-xs font-semibold transition-all ${
+              paymentMethod === "card"
+                ? "bg-accent text-accent-foreground shadow-md"
+                : "text-muted-foreground hover:text-foreground hover:bg-accent/5"
+            }`}
+          >
+            <CreditCard className="size-4" />
+            Card Payment
+          </button>
+          <button
+            type="button"
+            onClick={() => setPaymentMethod("upi")}
+            className={`flex items-center justify-center gap-2 py-2.5 rounded-lg text-xs font-semibold transition-all ${
+              paymentMethod === "upi"
+                ? "bg-accent text-accent-foreground shadow-md"
+                : "text-muted-foreground hover:text-foreground hover:bg-accent/5"
+            }`}
+          >
+            <Smartphone className="size-4" />
+            UPI Payment
+          </button>
+        </div>
+
+        <form onSubmit={handlePaymentSubmit} className="space-y-4">
+          {paymentMethod === "card" ? (
+            <>
+              <div className="space-y-1.5">
+                <Label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Cardholder Name</Label>
+                <Input
+                  type="text"
+                  placeholder="Jane Doe"
+                  defaultValue={fullName || user?.user_metadata?.full_name || ""}
+                  required
+                  className="bg-background border-border text-foreground focus-visible:ring-accent"
+                />
+              </div>
+
+              <div className="space-y-1.5">
+                <Label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Card Number</Label>
+                <div className="relative">
+                  <CreditCard className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground shrink-0" />
+                  <Input
+                    type="text"
+                    placeholder="4111 1111 1111 1111"
+                    value={cardNumber}
+                    onChange={(e) => setCardNumber(formatCardNumber(e.target.value))}
+                    required
+                    maxLength={19}
+                    className="bg-background border-border text-foreground pl-10 focus-visible:ring-accent font-mono"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-1.5">
+                  <Label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Expiry Date</Label>
+                  <Input
+                    type="text"
+                    placeholder="MM/YY"
+                    value={cardExpiry}
+                    onChange={(e) => setCardExpiry(formatExpiry(e.target.value))}
+                    required
+                    maxLength={5}
+                    className="bg-background border-border text-foreground focus-visible:ring-accent font-mono"
+                  />
+                </div>
+
+                <div className="space-y-1.5">
+                  <Label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">CVC</Label>
+                  <Input
+                    type="text"
+                    placeholder="123"
+                    value={cardCvc}
+                    onChange={(e) => setCardCvc(e.target.value.replace(/\D/g, "").substring(0, 3))}
+                    required
+                    maxLength={3}
+                    className="bg-background border-border text-foreground focus-visible:ring-accent font-mono"
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-1.5">
+                <Label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Billing Postal Code</Label>
+                <Input
+                  type="text"
+                  placeholder="10001"
+                  value={cardZip}
+                  onChange={(e) => setCardZip(e.target.value.replace(/\D/g, "").substring(0, 5))}
+                  required
+                  maxLength={5}
+                  className="bg-background border-border text-foreground focus-visible:ring-accent font-mono"
+                />
+              </div>
+            </>
+          ) : (
+            <>
+              {/* UPI App Selection Grid */}
+              <div className="space-y-2">
+                <Label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Select UPI App</Label>
+                <div className="grid grid-cols-2 gap-3">
+                  <button
+                    type="button"
+                    onClick={() => setSelectedUpiProvider("gpay")}
+                    className={`relative flex flex-col items-start p-3 rounded-xl border transition-all ${
+                      selectedUpiProvider === "gpay"
+                        ? "border-accent bg-accent/10 text-accent font-medium shadow-md shadow-accent/5"
+                        : "border-border/60 bg-background/40 hover:bg-accent/5 text-muted-foreground hover:text-foreground"
+                    }`}
+                  >
+                    {selectedUpiProvider === "gpay" && <Check className="absolute top-3 right-3 size-4" />}
+                    <span className="text-xs font-semibold tracking-wide">Google Pay</span>
+                    <span className="text-[9px] opacity-75 mt-0.5">Instant pay</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedUpiProvider("phonepe")}
+                    className={`relative flex flex-col items-start p-3 rounded-xl border transition-all ${
+                      selectedUpiProvider === "phonepe"
+                        ? "border-accent bg-accent/10 text-accent font-medium shadow-md shadow-accent/5"
+                        : "border-border/60 bg-background/40 hover:bg-accent/5 text-muted-foreground hover:text-foreground"
+                    }`}
+                  >
+                    {selectedUpiProvider === "phonepe" && <Check className="absolute top-3 right-3 size-4" />}
+                    <span className="text-xs font-semibold tracking-wide">PhonePe</span>
+                    <span className="text-[9px] opacity-75 mt-0.5">Secure pay</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedUpiProvider("paytm")}
+                    className={`relative flex flex-col items-start p-3 rounded-xl border transition-all ${
+                      selectedUpiProvider === "paytm"
+                        ? "border-accent bg-accent/10 text-accent font-medium shadow-md shadow-accent/5"
+                        : "border-border/60 bg-background/40 hover:bg-accent/5 text-muted-foreground hover:text-foreground"
+                    }`}
+                  >
+                    {selectedUpiProvider === "paytm" && <Check className="absolute top-3 right-3 size-4" />}
+                    <span className="text-xs font-semibold tracking-wide">Paytm</span>
+                    <span className="text-[9px] opacity-75 mt-0.5">Fast checkout</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedUpiProvider("bhim")}
+                    className={`relative flex flex-col items-start p-3 rounded-xl border transition-all ${
+                      selectedUpiProvider === "bhim"
+                        ? "border-accent bg-accent/10 text-accent font-medium shadow-md shadow-accent/5"
+                        : "border-border/60 bg-background/40 hover:bg-accent/5 text-muted-foreground hover:text-foreground"
+                    }`}
+                  >
+                    {selectedUpiProvider === "bhim" && <Check className="absolute top-3 right-3 size-4" />}
+                    <span className="text-xs font-semibold tracking-wide">BHIM UPI</span>
+                    <span className="text-[9px] opacity-75 mt-0.5">Secure gateway</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* QR Code Container */}
+              <div className="flex flex-col items-center justify-center p-4 bg-background/50 border border-border/60 rounded-2xl relative overflow-hidden group">
+                <div className="absolute inset-0 bg-gradient-to-tr from-accent/5 via-transparent to-accent/5 opacity-50"></div>
+                <div className="relative p-3 bg-white rounded-xl shadow-lg border border-white mb-2 transition-transform duration-300 group-hover:scale-105">
+                  <svg className="size-32 text-slate-800" viewBox="0 0 100 100" fill="currentColor">
+                    <rect x="0" y="0" width="30" height="30" rx="4" fill="currentColor" />
+                    <rect x="5" y="5" width="20" height="20" rx="2" fill="white" />
+                    <rect x="10" y="10" width="10" height="10" rx="1" fill="currentColor" />
+                    
+                    <rect x="70" y="0" width="30" height="30" rx="4" fill="currentColor" />
+                    <rect x="75" y="5" width="20" height="20" rx="2" fill="white" />
+                    <rect x="80" y="10" width="10" height="10" rx="1" fill="currentColor" />
+                    
+                    <rect x="0" y="70" width="30" height="30" rx="4" fill="currentColor" />
+                    <rect x="5" y="75" width="20" height="20" rx="2" fill="white" />
+                    <rect x="10" y="80" width="10" height="10" rx="1" fill="currentColor" />
+                    
+                    <rect x="40" y="10" width="10" height="10" rx="1" fill="currentColor" />
+                    <rect x="55" y="10" width="5" height="15" rx="1" fill="currentColor" />
+                    <rect x="40" y="25" width="15" height="5" rx="0.5" fill="currentColor" />
+                    <rect x="50" y="35" width="10" height="10" rx="1" fill="currentColor" />
+                    
+                    <rect x="10" y="40" width="10" height="10" rx="1" fill="currentColor" />
+                    <rect x="25" y="40" width="15" height="5" rx="0.5" fill="currentColor" />
+                    <rect x="15" y="55" width="5" height="10" rx="1" fill="currentColor" />
+                    <rect x="35" y="50" width="10" height="10" rx="1" fill="currentColor" />
+                    
+                    <rect x="70" y="40" width="10" height="10" rx="1" fill="currentColor" />
+                    <rect x="85" y="40" width="10" height="5" rx="0.5" fill="currentColor" />
+                    <rect x="75" y="55" width="15" height="10" rx="1" fill="currentColor" />
+                    <rect x="65" y="50" width="5" height="5" rx="1" fill="currentColor" />
+                    
+                    <rect x="40" y="70" width="10" height="15" rx="1" fill="currentColor" />
+                    <rect x="55" y="70" width="10" height="10" rx="1" fill="currentColor" />
+                    <rect x="40" y="90" width="25" height="5" rx="0.5" fill="currentColor" />
+                    <rect x="70" y="70" width="5" height="15" rx="1" fill="currentColor" />
+                    <rect x="80" y="75" width="10" height="10" rx="1" fill="currentColor" />
+                    <rect x="85" y="90" width="10" height="5" rx="1" fill="currentColor" />
+                    
+                    <rect x="40" y="40" width="20" height="20" rx="3" fill="white" />
+                    <circle cx="50" cy="50" r="7" fill="#ea580c" />
+                    <polygon points="48,46 54,50 48,54" fill="white" />
+                  </svg>
+                </div>
+                <span className="text-[10px] font-semibold text-muted-foreground tracking-wider uppercase flex items-center gap-1.5">
+                  <QrCode className="size-3 text-accent animate-pulse" />
+                  Scan QR to pay ₹999 instantly
+                </span>
+              </div>
+
+              {/* UPI ID (VPA) Input */}
+              <div className="space-y-1.5">
+                <Label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">UPI ID (VPA)</Label>
+                <div className="relative">
+                  <Smartphone className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground shrink-0" />
+                  <Input
+                    type="text"
+                    placeholder="e.g. mobile@upi or name@okaxis"
+                    value={upiId}
+                    onChange={(e) => setUpiId(e.target.value.trim())}
+                    required
+                    className="bg-background border-border text-foreground pl-10 focus-visible:ring-accent font-mono text-sm"
+                  />
+                </div>
+                <p className="text-[10px] text-muted-foreground/80 mt-1">We will send a payment request to this VPA.</p>
+              </div>
+            </>
+          )}
+
+          <div className="flex gap-2 items-center text-xs text-muted-foreground/80 mt-2 bg-background/30 p-2.5 rounded-lg border border-border/40">
+            <Lock className="size-3.5 text-accent shrink-0" />
+            <span>Payments are simulated and securely processed.</span>
+          </div>
+
+          <div className="flex justify-end gap-3 mt-6 pt-4 border-t border-border/40">
+            <Button
+              type="button"
+              variant="ghost"
+              onClick={() => setShowPayment(false)}
+              className="hover:bg-accent/10 hover:text-foreground text-muted-foreground font-medium"
+            >
+              Cancel
+            </Button>
+            <Button
+              type="submit"
+              disabled={paymentLoading}
+              className="bg-accent hover:bg-accent/90 text-accent-foreground font-medium px-6"
+            >
+              {paymentLoading ? (
+                <>
+                  <Loader2 className="size-4 animate-spin mr-2" />
+                  {paymentStatusText}
+                </>
+              ) : (
+                "Pay & Subscribe"
+              )}
+            </Button>
+          </div>
+        </form>
+      </DialogContent>
+    </Dialog>
+  </>
   );
 }

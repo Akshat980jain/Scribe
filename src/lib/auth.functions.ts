@@ -40,6 +40,17 @@ async function loadProfileFromSupabase(userId: string) {
   }
 }
 
+interface GenerationVersion {
+  id: string;
+  tone: string;
+  length: string;
+  format: string;
+  title: string;
+  markdown: string;
+  seo: any;
+  createdAt: string;
+}
+
 interface Generation {
   id: string;
   url: string;
@@ -51,6 +62,8 @@ interface Generation {
   markdown?: string;
   seo?: any;
   workspaceId?: string;
+  versions?: GenerationVersion[];
+  activeVersionId?: string;
 }
 
 interface Workspace {
@@ -75,6 +88,11 @@ interface User {
   workspaces?: Workspace[];
   templates?: Template[];
   plan?: string;
+  integrations?: {
+    devto?: string;
+    medium?: string;
+    hashnode?: string;
+  };
 }
 
 // Helper to init/read DB
@@ -90,6 +108,7 @@ function readDb(): { users: User[] } {
     if (!u.workspaces) u.workspaces = [];
     if (!u.templates) u.templates = [];
     if (!u.plan) u.plan = "Free";
+    if (!u.integrations) u.integrations = { devto: "", medium: "", hashnode: "" };
   });
   
   return db;
@@ -140,7 +159,11 @@ export const authenticateUser = createServerFn({ method: "POST" })
         user: {
           id: newUser.id,
           email: newUser.email,
-          user_metadata: { full_name: newUser.fullName, plan: newUser.plan },
+          user_metadata: { 
+            full_name: newUser.fullName, 
+            plan: newUser.plan,
+            integrations: { devto: "", medium: "", hashnode: "" }
+          },
         },
       };
     }
@@ -173,7 +196,11 @@ export const authenticateUser = createServerFn({ method: "POST" })
         user: {
           id: existingUser.id,
           email: existingUser.email,
-          user_metadata: { full_name: fullName, plan },
+          user_metadata: { 
+            full_name: fullName, 
+            plan,
+            integrations: existingUser.integrations || { devto: "", medium: "", hashnode: "" }
+          },
         },
       };
     }
@@ -203,7 +230,11 @@ export const updateUserProfile = createServerFn({ method: "POST" })
       user: {
         id,
         email,
-        user_metadata: { full_name: fullName, plan },
+        user_metadata: { 
+          full_name: fullName, 
+          plan,
+          integrations: db.users[userIndex]?.integrations || { devto: "", medium: "", hashnode: "" }
+        },
       }
     };
   });
@@ -235,7 +266,8 @@ export const upgradeUserPlan = createServerFn({ method: "POST" })
         email: db.users[userIndex].email,
         user_metadata: { 
           full_name: db.users[userIndex].fullName,
-          plan: db.users[userIndex].plan || "Free"
+          plan: db.users[userIndex].plan || "Free",
+          integrations: db.users[userIndex].integrations || { devto: "", medium: "", hashnode: "" }
         },
       }
     };
@@ -283,6 +315,7 @@ export const getUserDashboardData = createServerFn({ method: "GET" })
       workspaces: user.workspaces || [],
       templates: user.templates || [],
       plan: user.plan || "Free",
+      integrations: user.integrations || { devto: "", medium: "", hashnode: "" },
       notFound: false,
     };
   });
@@ -290,6 +323,7 @@ export const getUserDashboardData = createServerFn({ method: "GET" })
 export const saveGenerationHistory = createServerFn({ method: "POST" })
   .inputValidator((data: unknown) => z.object({
     userId: z.string(),
+    id: z.string().optional(),
     url: z.string(),
     tone: z.string(),
     length: z.string(),
@@ -300,23 +334,116 @@ export const saveGenerationHistory = createServerFn({ method: "POST" })
     workspaceId: z.string().optional()
   }).parse(data))
   .handler(async ({ data }) => {
-    const { userId, ...genData } = data;
+    const { userId, id, ...genData } = data;
     const db = readDb();
     const userIndex = db.users.findIndex(u => u.id === userId);
     if (userIndex === -1) throw new Error("User not found");
 
-    const newGen: Generation = {
-      id: crypto.randomUUID(),
-      ...genData,
+    if (!db.users[userIndex].generations) db.users[userIndex].generations = [];
+
+    const newVersionId = crypto.randomUUID();
+    const newVersion: GenerationVersion = {
+      id: newVersionId,
+      tone: genData.tone,
+      length: genData.length,
+      format: genData.format,
+      title: genData.title,
+      markdown: genData.markdown,
+      seo: genData.seo,
       createdAt: new Date().toISOString()
     };
 
-    if (!db.users[userIndex].generations) db.users[userIndex].generations = [];
+    if (id) {
+      const genIndex = db.users[userIndex].generations!.findIndex(g => g.id === id);
+      if (genIndex !== -1) {
+        const existing = db.users[userIndex].generations![genIndex];
+        
+        let versions = existing.versions || [];
+        if (versions.length === 0) {
+          // Backfill backwards compatibility
+          versions = [{
+            id: crypto.randomUUID(),
+            tone: existing.tone || "Professional",
+            length: existing.length || "Medium",
+            format: existing.format || "Deep Dive",
+            title: existing.title || "Version 1",
+            markdown: existing.markdown || "",
+            seo: existing.seo || {},
+            createdAt: existing.createdAt || new Date().toISOString()
+          }];
+        }
+
+        const updatedGen: Generation = {
+          ...existing,
+          ...genData,
+          versions: [...versions, newVersion],
+          activeVersionId: newVersionId
+        };
+        db.users[userIndex].generations![genIndex] = updatedGen;
+        writeDb(db);
+        return { generation: updatedGen, isUpdate: true };
+      }
+    }
+
+    const newGen: Generation = {
+      id: crypto.randomUUID(),
+      ...genData,
+      versions: [newVersion],
+      activeVersionId: newVersionId,
+      createdAt: new Date().toISOString()
+    };
+
     db.users[userIndex].generations!.push(newGen);
     writeDb(db);
 
-    return { generation: newGen };
+    return { generation: newGen, isUpdate: false };
   });
+
+export const updateGenerationContent = createServerFn({ method: "POST" })
+  .inputValidator((data: unknown) => z.object({
+    userId: z.string(),
+    genId: z.string(),
+    versionId: z.string().optional(),
+    markdown: z.string(),
+    title: z.string().optional(),
+    seo: z.any().optional()
+  }).parse(data))
+  .handler(async ({ data }) => {
+    const { userId, genId, versionId, markdown, title, seo } = data;
+    const db = readDb();
+    const userIndex = db.users.findIndex(u => u.id === userId);
+    if (userIndex === -1) throw new Error("User not found");
+
+    if (!db.users[userIndex].generations) db.users[userIndex].generations = [];
+    const gens = db.users[userIndex].generations!;
+    const genIndex = gens.findIndex(g => g.id === genId);
+    if (genIndex !== -1) {
+      const existing = gens[genIndex];
+      existing.markdown = markdown;
+      if (title) existing.title = title;
+      if (seo) existing.seo = seo;
+
+      if (existing.versions && existing.versions.length > 0) {
+        const vId = versionId || existing.activeVersionId;
+        existing.versions = existing.versions.map((v: any) => {
+          if (v.id === vId) {
+            return {
+              ...v,
+              markdown,
+              title: title || v.title,
+              seo: seo || v.seo
+            };
+          }
+          return v;
+        });
+      }
+      db.users[userIndex].generations![genIndex] = existing;
+      writeDb(db);
+      return { success: true, generation: existing };
+    }
+    return { success: false, error: "Generation not found" };
+  });
+
 
 export const deleteGenerationHistory = createServerFn({ method: "POST" })
   .inputValidator((data: unknown) => z.object({ userId: z.string(), genId: z.string() }).parse(data))
@@ -462,7 +589,7 @@ export const getSupportBotResponse = createServerFn({ method: "POST" })
         return "Hello! I'm Scribe's AI Support Assistant. How can I help you today? You can ask me about workspaces, saving custom templates, our pricing plans, or how to get the best blog posts from your YouTube videos!";
       }
       if (q.includes("pricing") || q.includes("upgrade") || q.includes("plan") || q.includes("cost") || q.includes("pro") || q.includes("free")) {
-        return "Scribe offers two plans:\n\n1. **Free Plan** ($0/mo): Includes 15 blog post generations per month, standard AI models, and basic templates.\n2. **Pro Plan** ($15/mo): Includes unlimited blog post generations, premium models (GPT-4o & Claude 3.5 Sonnet), custom templates, and direct workspace export features.\n\nYou can switch between plans anytime in the **Upgrade Plan** tab inside the Settings Modal! Let me know if you would like me to show you how.";
+        return "Scribe offers two plans:\n\n1. **Free Plan** (₹0/mo): Includes 10 blog post generations per month, standard AI models, and basic templates.\n2. **Pro Plan** (₹999/mo): Includes unlimited blog post generations, premium models (GPT-4o & Claude 3.5 Sonnet), custom templates, and direct workspace export features.\n\nYou can switch between plans anytime in the **Upgrade Plan** tab inside the Settings Modal! Let me know if you would like me to show you how.";
       }
       if (q.includes("workspace") || q.includes("folder") || q.includes("move") || q.includes("workspace folders")) {
         return "Workspaces are folders that help you organize your generation history! You can:\n\n* Click the **`+`** button next to 'Workspaces' in the left sidebar to create a folder (e.g. 'Tech', 'Cooking').\n* Hover on any item in your generation history and click the three dots (`...`) to move that post into a workspace or delete it.\n* Click on a workspace in the sidebar to filter your history list to only show posts inside that folder!";
@@ -474,7 +601,7 @@ export const getSupportBotResponse = createServerFn({ method: "POST" })
         return "It's simple to convert a video to a blog post:\n1. Paste any valid YouTube video URL into the main input field.\n2. Select your desired Tone (e.g., Professional, Casual), Length, and Blog Format.\n3. Click **Generate Blog Post**.\n\nScribe will automatically retrieve the transcript, analyze it, and write a perfectly formatted SEO-optimized blog draft complete with title, meta description, and keywords in seconds!";
       }
       if (q.includes("limit") || q.includes("generations") || q.includes("many")) {
-        return "On the **Free Plan**, you get 15 generations per month. **Pro Plan** users get unlimited generations! You can track your current monthly usage using the progress bar in the bottom-left corner of the sidebar.";
+        return "On the **Free Plan**, you get 10 generations per month. **Pro Plan** users get unlimited generations! You can track your current monthly usage using the progress bar in the bottom-left corner of the sidebar.";
       }
       if (q.includes("email") || q.includes("change")) {
         return "For security verification, email changes are currently handled manually by our team. Please submit a request detailing your current email and new email to support@scribe.io, and we will update it for you within 24 hours.";
@@ -505,7 +632,7 @@ Your job is to assist users with their questions about the Scribe application.
 Key App Features to reference:
 - Workspaces: Folders created by clicking "+" next to "Workspaces" in the left sidebar to group generated blog history. Clicking a folder filters the history panel.
 - Templates: Quick configuration presets for Tone (Professional, Casual, etc.), Length (Short, Medium, Long), and Format (Listicle, Deep Dive, etc.). Users can click "+" next to "Templates" to save their active dropdown choices as a custom template.
-- Subscription Plans: Free Tier ($0/mo, 15 generations/month, standard models) and Pro Tier ($15/mo, unlimited generations, premium models, custom templates). Switchable under the "Upgrade Plan" settings tab.
+- Subscription Plans: Free Tier (₹0/mo, 10 generations/month, standard models) and Pro Tier (₹999/mo, unlimited generations, premium models, custom templates). Switchable under the "Upgrade Plan" settings tab.
 - Logging In/Out: Available in the profile dropdown inside the sidebar. Account details can be changed in settings.
 
 Always answer politely, keep answers concise, use markdown formatting for readability, and be highly supportive.
@@ -544,4 +671,42 @@ Answer the user's specific support request:`;
     // Add artificial delay to simulate realistic human/AI processing
     await new Promise(resolve => setTimeout(resolve, 1000));
     return { reply };
+  });
+
+export const updateUserIntegrations = createServerFn({ method: "POST" })
+  .inputValidator((data: unknown) => z.object({
+    id: z.string(),
+    devto: z.string().optional(),
+    medium: z.string().optional(),
+    hashnode: z.string().optional(),
+  }).parse(data))
+  .handler(async ({ data }) => {
+    const { id, devto, medium, hashnode } = data;
+    const db = readDb();
+
+    const userIndex = db.users.findIndex(u => u.id === id);
+    if (userIndex === -1) throw new Error("User not found");
+
+    db.users[userIndex].integrations = {
+      devto: devto || "",
+      medium: medium || "",
+      hashnode: hashnode || "",
+    };
+    writeDb(db);
+
+    const email = db.users[userIndex].email;
+    const fullName = db.users[userIndex].fullName;
+    const plan = db.users[userIndex].plan ?? "Free";
+
+    return {
+      user: {
+        id,
+        email,
+        user_metadata: {
+          full_name: fullName,
+          plan,
+          integrations: db.users[userIndex].integrations || { devto: "", medium: "", hashnode: "" }
+        }
+      }
+    };
   });
