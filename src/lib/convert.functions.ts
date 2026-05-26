@@ -72,12 +72,13 @@ export const convertVideo = createServerFn({ method: "POST" })
       return { error: "Missing either LOVABLE_API_KEY or OPENROUTER_API_KEY." };
     }
 
-    // 1. Fetch transcript
-    let transcript = "";
+    // 1. Fetch transcript WITH timestamps so the AI can cite source moments.
+    let transcriptForAi = "";
+    let hasTimestamps = false;
     try {
       const tRes = await fetchWithTimeout(
-        `https://api.supadata.ai/v1/youtube/transcript?url=${encodeURIComponent(data.url)}&text=true`,
-        { 
+        `https://api.supadata.ai/v1/youtube/transcript?url=${encodeURIComponent(data.url)}`,
+        {
           headers: { "x-api-key": supadataKey },
           timeout: 20000
         },
@@ -86,16 +87,40 @@ export const convertVideo = createServerFn({ method: "POST" })
         const body = await tRes.text();
         return { error: `Transcript fetch failed (${tRes.status}). ${body.slice(0, 200)}` };
       }
-      const tJson = (await tRes.json()) as { content?: string };
-      transcript = (tJson.content ?? "").trim();
-      if (!transcript) return { error: "No transcript available for this video." };
+      const tJson = (await tRes.json()) as {
+        content?: string | Array<{ text: string; offset: number; duration?: number }>;
+      };
+
+      if (Array.isArray(tJson.content) && tJson.content.length > 0) {
+        // Group segments into ~25-second chunks tagged with their start second.
+        hasTimestamps = true;
+        const CHUNK_SECONDS = 25;
+        const chunks: string[] = [];
+        let curStart = Math.floor((tJson.content[0]?.offset ?? 0) / 1000);
+        let curText: string[] = [];
+        for (const seg of tJson.content) {
+          const sec = Math.floor((seg.offset ?? 0) / 1000);
+          if (curText.length === 0) curStart = sec;
+          curText.push(seg.text);
+          if (sec - curStart >= CHUNK_SECONDS) {
+            chunks.push(`[${curStart}s] ${curText.join(" ").trim()}`);
+            curText = [];
+          }
+        }
+        if (curText.length) chunks.push(`[${curStart}s] ${curText.join(" ").trim()}`);
+        transcriptForAi = chunks.join("\n");
+      } else if (typeof tJson.content === "string") {
+        transcriptForAi = tJson.content.trim();
+      }
+
+      if (!transcriptForAi) return { error: "No transcript available for this video." };
     } catch (e) {
       return { error: `Failed to fetch transcript: ${(e as Error).message}` };
     }
 
     // Cap transcript to avoid blowing token budget
     const MAX_CHARS = 60_000;
-    if (transcript.length > MAX_CHARS) transcript = transcript.slice(0, MAX_CHARS);
+    if (transcriptForAi.length > MAX_CHARS) transcriptForAi = transcriptForAi.slice(0, MAX_CHARS);
 
     // 2. Generate blog
     let brandVoiceInstructions = "";
