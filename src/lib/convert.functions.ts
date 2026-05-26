@@ -167,6 +167,26 @@ export const convertVideo = createServerFn({ method: "POST" })
       }
     }
 
+    const citationRules = hasTimestamps
+      ? `
+
+─── SOURCE-OF-TRUTH CITATIONS (REQUIRED) ───
+The transcript below is annotated with markers like [12s], [37s], [65s] that mark the
+exact second in the source video where each chunk was spoken. After every major claim,
+statistic, quote, or section transition in the article, insert a citation marker in
+this EXACT format: [[t=SECONDS]] where SECONDS is the integer from the nearest [Xs]
+marker in the transcript that supports the claim.
+
+Rules for citations:
+- Place the marker inline at the END of the sentence it supports, before the period
+- Use 5-10 citations spread evenly across the article (intro, each H2 section, conclusion)
+- Never invent timestamps — only use seconds that actually appear as [Xs] in the transcript
+- Never group two markers together
+- Do NOT cite generic transitions or your own commentary — only factual claims from the source
+Example: "Transformer models reduced training time by 80% [[t=142]]."
+──────────────────────────────────────────`
+      : "";
+
     const system = `You are a professional blog writer and content strategist with expertise in SEO.
 Your job is to convert YouTube video transcripts into polished, engaging blog posts.
 
@@ -183,15 +203,15 @@ Rules:
 - Tone: ${data.tone}
 - Format style: ${data.format}
 - Length: approximately ${LENGTH_WORDS[data.length]}
-- Output format: Markdown${brandVoiceInstructions}`;
+- Output format: Markdown${brandVoiceInstructions}${citationRules}`;
 
-    const user = `Here is the transcript from a YouTube video:
+    const user = `Here is the transcript from a YouTube video${hasTimestamps ? " (annotated with [Xs] timestamps marking the second each chunk was spoken)" : ""}:
 
 ---
-${transcript}
+${transcriptForAi}
 ---
 
-Please convert this into a complete blog post following all the rules.
+Please convert this into a complete blog post following all the rules${hasTimestamps ? ", including the SOURCE-OF-TRUTH CITATIONS rules" : ""}.
 Respond ONLY with the blog post in Markdown format.
 At the end, append a JSON block exactly like this (after the blog content):
 
