@@ -1,0 +1,25 @@
+# Render Blueprint configuration
+# For more information, see https://render.com/docs/blueprints
+services:
+  - type: web
+    name: scribe-blog-repurposer
+    runtime: node
+    buildCommand: CLOUDFLARE=false npm install && CLOUDFLARE=false npm run build
+    startCommand: node serve-node.js
+    envVars:
+      - key: CLOUDFLARE
+        value: "false"
+      - key: SUPABASE_PUBLISHABLE_KEY
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: VITE_SUPABASE_PROJECT_ID
+        sync: false
+      - key: VITE_SUPABASE_PUBLISHABLE_KEY
+        sync: false
+      - key: VITE_SUPABASE_URL
+        sync: false
+      - key: SUPADATA_API_KEY
+        sync: false
+      - key: OPENROUTER_API_KEY
+        sync: false
