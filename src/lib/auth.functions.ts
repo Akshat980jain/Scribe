@@ -203,17 +203,18 @@ const AuthSchema = z.object({
 export const authenticateUser = createServerFn({ method: "POST" })
   .inputValidator((data: unknown) => AuthSchema.parse(data))
   .handler(async ({ data }) => {
-    const { email, password, action } = data;
+    const normalizedEmail = data.email.toLowerCase().trim();
+    const { password, action } = data;
 
     // Hashing with SHA-256 for secure credentials signup, supports legacy Base64 for backwards compatibility
     const passwordHashLegacy = toBase64Legacy(password);
     const passwordHashSecure = await sha256(password);
 
-    // Query profile from Supabase by email
+    // Query profile from Supabase by email (case-insensitive via ilike)
     const { data: existingUser } = await supabaseAdmin
       .from("profiles")
       .select("*")
-      .eq("email", email)
+      .ilike("email", normalizedEmail)
       .maybeSingle();
 
     if (action === "signup") {
@@ -224,9 +225,9 @@ export const authenticateUser = createServerFn({ method: "POST" })
       const userId = crypto.randomUUID();
       const newUser = {
         user_id: userId,
-        email,
+        email: normalizedEmail,
         password_hash: passwordHashSecure, // New signups strictly use SHA-256
-        full_name: email.split("@")[0],
+        full_name: normalizedEmail.split("@")[0],
         plan: "Free",
         integrations: { devto: "", medium: "", hashnode: "" }
       };
@@ -243,7 +244,7 @@ export const authenticateUser = createServerFn({ method: "POST" })
       return {
         user: {
           id: userId,
-          email,
+          email: normalizedEmail,
           user_metadata: { 
             full_name: newUser.full_name, 
             plan: newUser.plan,
@@ -431,42 +432,92 @@ export const deleteUserAccount = createServerFn({ method: "POST" })
   });
 
 async function ensureProfileExists(userId: string) {
+  // 1. Fetch user from auth.users to get their email if they are an OAuth user
+  let email = `user-${userId.substring(0, 8)}@example.com`;
+  let fullName = "User";
+  try {
+    const { data: authUser } = await supabaseAdmin.auth.admin.getUserById(userId);
+    if (authUser?.user?.email) {
+      email = authUser.user.email.toLowerCase().trim();
+      fullName = authUser.user.user_metadata?.full_name || email.split("@")[0];
+    }
+  } catch (e) {
+    console.error("Self-healing: Failed to retrieve user from auth.users:", e);
+  }
+
+  // 2. Check if a profile with this userId already exists
   const { data: profile } = await supabaseAdmin
     .from("profiles")
-    .select("user_id")
+    .select("*")
     .eq("user_id", userId)
     .maybeSingle();
 
-  if (!profile) {
-    let email = `user-${userId.substring(0, 8)}@example.com`;
-    let fullName = "User";
-    try {
-      const { data: authUser } = await supabaseAdmin.auth.admin.getUserById(userId);
-      if (authUser?.user?.email) {
-        email = authUser.user.email;
-        fullName = authUser.user.user_metadata?.full_name || email.split("@")[0];
-      }
-    } catch (e) {
-      console.error("Self-healing: Failed to retrieve user from auth.users:", e);
-    }
+  if (profile) {
+    return; // Profile already exists and is fully correct
+  }
 
-    const { error } = await supabaseAdmin.from("profiles").insert({
+  // 3. Since no profile exists for this userId, check if a profile with the same email exists under a different user_id
+  const { data: existingProfileByEmail } = await supabaseAdmin
+    .from("profiles")
+    .select("*")
+    .ilike("email", email)
+    .maybeSingle();
+
+  if (existingProfileByEmail && existingProfileByEmail.user_id !== userId) {
+    const oldUserId = existingProfileByEmail.user_id;
+    console.log(`Unifying accounts for ${email}: Merging old credentials user_id (${oldUserId}) into new OAuth user_id (${userId})`);
+
+    // Insert new profile with new userId, copying over settings from old profile
+    const { error: insertError } = await supabaseAdmin.from("profiles").insert({
       user_id: userId,
-      email,
-      full_name: fullName,
-      plan: "Free",
-      integrations: { devto: "", medium: "", hashnode: "" },
-      brand_voice: {
+      email: existingProfileByEmail.email,
+      full_name: existingProfileByEmail.full_name || fullName,
+      plan: existingProfileByEmail.plan || "Free",
+      integrations: existingProfileByEmail.integrations || { devto: "", medium: "", hashnode: "" },
+      brand_voice: existingProfileByEmail.brand_voice || {
         enabled: false,
         vocabulary: { prefer: "", avoid: "" },
         sliders: { depth: 50, exuberance: 50, directness: 50 },
         sampleText: ""
-      }
+      },
+      password_hash: existingProfileByEmail.password_hash // Keep password hash so they can still use credentials too!
     });
 
-    if (error) {
-      console.error("Self-healing: Failed to insert missing profile:", error);
+    if (insertError) {
+      console.error("Failed to insert unified profile:", insertError);
+      return;
     }
+
+    // Update child tables to point to the new userId
+    await Promise.all([
+      supabaseAdmin.from("workspaces").update({ user_id: userId }).eq("user_id", oldUserId),
+      supabaseAdmin.from("generations").update({ user_id: userId }).eq("user_id", oldUserId),
+      supabaseAdmin.from("templates").update({ user_id: userId }).eq("user_id", oldUserId)
+    ]);
+
+    // Safely delete the old profile row
+    await supabaseAdmin.from("profiles").delete().eq("user_id", oldUserId);
+    console.log(`Successfully merged all workspaces, generations, and templates for ${email} to user_id: ${userId}`);
+    return;
+  }
+
+  // 4. If no existing profile by email, create a brand new profile
+  const { error } = await supabaseAdmin.from("profiles").insert({
+    user_id: userId,
+    email,
+    full_name: fullName,
+    plan: "Free",
+    integrations: { devto: "", medium: "", hashnode: "" },
+    brand_voice: {
+      enabled: false,
+      vocabulary: { prefer: "", avoid: "" },
+      sliders: { depth: 50, exuberance: 50, directness: 50 },
+      sampleText: ""
+    }
+  });
+
+  if (error) {
+    console.error("Self-healing: Failed to insert missing profile:", error);
   }
 }
 
@@ -479,7 +530,7 @@ export const getUserDashboardData = createServerFn({ method: "GET" })
 
     const { data: profile } = await supabaseAdmin
       .from("profiles")
-      .select("plan, integrations, brand_voice")
+      .select("email, full_name, plan, integrations, brand_voice")
       .eq("user_id", userId)
       .maybeSingle();
 
@@ -495,6 +546,8 @@ export const getUserDashboardData = createServerFn({ method: "GET" })
         generations: [],
         workspaces: [],
         templates: [],
+        email: "",
+        fullName: "",
         plan: "Free",
         integrations: { devto: "", medium: "", hashnode: "" },
         brandVoice: defaultBrandVoice,
@@ -559,6 +612,8 @@ export const getUserDashboardData = createServerFn({ method: "GET" })
       generations: mappedGenerations,
       workspaces: mappedWorkspaces,
       templates: mappedTemplates,
+      email: profile.email,
+      fullName: profile.full_name,
       plan: profile.plan || "Free",
       integrations: decryptedIntegrations,
       brandVoice: profile.brand_voice || defaultBrandVoice,

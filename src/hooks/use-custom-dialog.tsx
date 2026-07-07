@@ -155,7 +155,7 @@ export function CustomDialogProvider({ children }: { children: React.ReactNode }
       {children}
       
       <Dialog open={isOpen} onOpenChange={handleOpenChange}>
-        <DialogContent className="max-w-[420px] p-6 bg-card/95 backdrop-blur-xl border border-border/60 text-foreground shadow-2xl rounded-2xl overflow-hidden transition-all duration-300">
+        <DialogContent data-testid="custom-dialog" className="max-w-[420px] p-6 bg-card/95 backdrop-blur-xl border border-border/60 text-foreground shadow-2xl rounded-2xl overflow-hidden transition-all duration-300">
           {/* Subtle Glowing Background Accent */}
           <div className="absolute -top-10 -right-10 w-32 h-32 bg-accent/10 rounded-full blur-3xl pointer-events-none" />
           

@@ -402,7 +402,7 @@ export function SettingsModal({
   return (
     <>
       <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-3xl p-0 overflow-hidden bg-card border-border text-foreground shadow-2xl rounded-2xl">
+      <DialogContent data-testid="settings-modal" className="max-w-3xl p-0 overflow-hidden bg-card border-border text-foreground shadow-2xl rounded-2xl">
         <div className="flex h-[500px]">
           <Tabs defaultValue={defaultTab} className="flex w-full h-full">
             {/* Sidebar Navigation */}
@@ -904,7 +904,7 @@ export function SettingsModal({
     </Dialog>
 
     <Dialog open={showPayment} onOpenChange={setShowPayment}>
-      <DialogContent className="max-w-md p-6 bg-card border-border text-foreground shadow-2xl rounded-2xl">
+      <DialogContent data-testid="checkout-dialog" className="max-w-md p-6 bg-card border-border text-foreground shadow-2xl rounded-2xl">
         <DialogHeader className="mb-4">
           <DialogTitle className="flex items-center gap-2 text-xl font-semibold text-foreground">
             <CreditCard className="size-5 text-accent" />

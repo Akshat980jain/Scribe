@@ -1,6 +1,6 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useServerFn } from "@tanstack/react-start";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { authenticateUser } from "@/lib/auth.functions";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -21,6 +21,11 @@ function AuthPage() {
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    document.documentElement.dataset.hydrated = "true";
+    (window as any).ReactHydrated = true;
+  }, []);
 
   const handleGoogleSignIn = async () => {
     setLoading(true);
@@ -68,6 +73,9 @@ function AuthPage() {
     setError(null);
 
     try {
+      // Clear any active/stale Supabase OAuth sessions first
+      await supabase.auth.signOut();
+
       // Try to log in first
       let res: any = await authFn({ data: { email, password, action: "login" } });
 

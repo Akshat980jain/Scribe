@@ -30,7 +30,7 @@ import {
   publishContentToPlatform,
   updateUserBrandVoice
 } from "@/lib/auth.functions";
-import { extractYouTubeId, injectCitationLinks, stripCitationMarkers } from "@/lib/citations";
+import { extractYouTubeId, injectCitationLinks, stripCitationMarkers, formatTimestamp } from "@/lib/citations";
 import { Label } from "@/components/ui/label";
 import {
   Select,
@@ -123,6 +123,9 @@ function Index() {
   const [length, setLength] = useState<Length>("Medium");
   const [format, setFormat] = useState<BlogFormat>("Deep Dive");
   const [useBrandVoice, setUseBrandVoice] = useState(false);
+  const [dualView, setDualView] = useState(false);
+  const [currentTime, setCurrentTime] = useState<number | null>(null);
+  const playerIframeRef = useRef<HTMLIFrameElement>(null);
 
   const [loading, setLoading] = useState(false);
   const [stepIdx, setStepIdx] = useState(-1);
@@ -210,6 +213,13 @@ function Index() {
     [markdown],
   );
 
+  const uniqueCitations = useMemo(() => {
+    if (!markdown) return [];
+    const matches = Array.from(markdown.matchAll(/\[\[t=(\d+)\]\]/g));
+    const seconds = matches.map(m => parseInt(m[1], 10)).filter(Number.isFinite);
+    return Array.from(new Set(seconds)).sort((a, b) => a - b);
+  }, [markdown]);
+
   const getDashboardFn = useServerFn(getUserDashboardData);
   const saveGenFn = useServerFn(saveGenerationHistory);
   const deleteGenFn = useServerFn(deleteGenerationHistory);
@@ -223,6 +233,8 @@ function Index() {
   const updateBrandVoiceFn = useServerFn(updateUserBrandVoice);
 
   useEffect(() => {
+    document.documentElement.dataset.hydrated = "true";
+    (window as any).ReactHydrated = true;
     const checkSession = () => {
       const stored = localStorage.getItem("custom_session");
       if (stored) {
@@ -242,6 +254,7 @@ function Index() {
         const customSession = {
           id: session.user.id,
           email: session.user.email,
+          isOauth: true,
           user_metadata: {
             full_name: session.user.user_metadata?.full_name || session.user.email?.split("@")[0] || "User",
             plan: "Free",
@@ -258,13 +271,14 @@ function Index() {
 
     const {
       data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, session) => {
+    } = supabase.auth.onAuthStateChange((event, session) => {
       if (session?.user) {
         const stored = localStorage.getItem("custom_session");
         const existingMetadata = stored ? JSON.parse(stored).user_metadata || {} : {};
         const customSession = {
           id: session.user.id,
           email: session.user.email,
+          isOauth: true,
           user_metadata: {
             full_name: session.user.user_metadata?.full_name || session.user.email?.split("@")[0] || "User",
             plan: "Free",
@@ -274,11 +288,15 @@ function Index() {
         };
         localStorage.setItem("custom_session", JSON.stringify(customSession));
         setUser(customSession);
-      } else {
-        if (localStorage.getItem("custom_session")) {
-          localStorage.removeItem("custom_session");
-          setUser(null);
-          toast.info("Session expired. Please log in again.");
+      } else if (event === "SIGNED_OUT") {
+        const stored = localStorage.getItem("custom_session");
+        if (stored) {
+          const parsed = JSON.parse(stored);
+          if (parsed.isOauth) {
+            localStorage.removeItem("custom_session");
+            setUser(null);
+            toast.info("Session expired. Please log in again.");
+          }
         }
       }
     });
@@ -322,23 +340,32 @@ function Index() {
           setWorkspaces(res.workspaces || []);
           setTemplates(res.templates || []);
 
-          // Sync real plan, integrations, AND brand_voice from DB
+          // Sync real plan, integrations, brand_voice, email, AND full_name from DB
           const freshPlan = res.plan || "Free";
           const freshIntegrations = res.integrations || { devto: "", medium: "", hashnode: "" };
           const freshBrandVoice = res.brandVoice || { enabled: false, vocabulary: { prefer: "", avoid: "" }, sliders: { depth: 50, exuberance: 50, directness: 50 }, sampleText: "" };
+          const freshEmail = res.email || user.email;
+          const freshFullName = res.fullName || user.user_metadata?.full_name;
+
           const currentPlan = user.user_metadata?.plan;
           const currentIntegrations = user.user_metadata?.integrations;
           const currentBrandVoice = user.user_metadata?.brand_voice;
+          const currentEmail = user.email;
+          const currentFullName = user.user_metadata?.full_name;
 
           const planChanged = currentPlan !== freshPlan;
           const integrationsChanged = JSON.stringify(currentIntegrations) !== JSON.stringify(freshIntegrations);
           const brandVoiceChanged = JSON.stringify(currentBrandVoice) !== JSON.stringify(freshBrandVoice);
+          const emailChanged = currentEmail !== freshEmail;
+          const fullNameChanged = currentFullName !== freshFullName;
 
-          if (planChanged || integrationsChanged || brandVoiceChanged) {
+          if (planChanged || integrationsChanged || brandVoiceChanged || emailChanged || fullNameChanged) {
             const updatedUser = {
               ...user,
+              email: freshEmail,
               user_metadata: {
                 ...(user.user_metadata || {}),
+                full_name: freshFullName,
                 plan: freshPlan,
                 integrations: freshIntegrations,
                 brand_voice: freshBrandVoice,
@@ -725,6 +752,47 @@ function Index() {
         }
         return g;
       }));
+    }
+  };
+
+  const seekTo = (sec: number) => {
+    setCurrentTime(sec);
+    if (playerIframeRef.current && playerIframeRef.current.contentWindow) {
+      playerIframeRef.current.contentWindow.postMessage(
+        JSON.stringify({
+          event: "command",
+          func: "seekTo",
+          args: [sec, true],
+        }),
+        "*",
+      );
+      playerIframeRef.current.contentWindow.postMessage(
+        JSON.stringify({
+          event: "command",
+          func: "playVideo",
+          args: [],
+        }),
+        "*",
+      );
+    }
+  };
+
+  const handleArticleClick = (e: React.MouseEvent) => {
+    let target = e.target as HTMLElement;
+    while (target && target !== articleRef.current) {
+      if (target.classList?.contains("yt-cite")) {
+        const tStr = target.getAttribute("data-t");
+        if (tStr) {
+          const sec = parseInt(tStr, 10);
+          if (Number.isFinite(sec)) {
+            e.preventDefault();
+            e.stopPropagation();
+            seekTo(sec);
+          }
+        }
+        break;
+      }
+      target = target.parentElement as HTMLElement;
     }
   };
 
@@ -1577,6 +1645,21 @@ function Index() {
                       </button>
                     </div>
 
+                    {sourceVideoId && view === "preview" && (
+                      <button
+                        type="button"
+                        onClick={() => setDualView(!dualView)}
+                        className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition-all flex items-center gap-1.5 ${
+                          dualView
+                            ? "bg-accent/15 text-accent border border-accent/25"
+                            : "text-muted-foreground hover:text-foreground hover:bg-accent/5 border border-transparent"
+                        }`}
+                      >
+                        <Youtube className="size-3.5" />
+                        {dualView ? "Disable Dual-View" : "🎥 Dual-View Sync"}
+                      </button>
+                    )}
+
                     {activeVersions.length > 1 && (
                       <div className="inline-flex items-center gap-1.5 bg-background/40 border border-border/40 rounded-lg p-1">
                         <span className="text-[9px] uppercase tracking-wider text-muted-foreground font-bold pl-2 pr-0.5 select-none">
@@ -1670,23 +1753,100 @@ function Index() {
                 </div>
 
                 {view === "preview" ? (
-                  <>
-                    {citationCount > 0 && (
-                      <div className="mb-3 inline-flex items-center gap-2 rounded-full border border-accent/30 bg-accent/10 px-3 py-1 text-xs font-medium text-accent">
-                        <span aria-hidden>▶</span>
-                        {citationCount} source citation{citationCount === 1 ? "" : "s"} — click any timestamp to jump to that moment in the video
+                  <div className={`grid gap-6 ${dualView ? "grid-cols-1 lg:grid-cols-5" : "grid-cols-1"}`}>
+                    {/* Left Column - Article Preview */}
+                    <div className={dualView ? "lg:col-span-3 space-y-4" : "space-y-4"}>
+                      {citationCount > 0 && (
+                        <div className="mb-1 inline-flex items-center gap-2 rounded-full border border-accent/30 bg-accent/10 px-3 py-1 text-xs font-medium text-accent">
+                          <span aria-hidden>▶</span>
+                          {citationCount} source citation{citationCount === 1 ? "" : "s"} — click any timestamp to jump to that moment in the video
+                        </div>
+                      )}
+                      
+                      <article 
+                        ref={articleRef} 
+                        className="prose-blog"
+                        onClick={handleArticleClick}
+                      >
+                        <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw]}>{renderedMarkdown}</ReactMarkdown>
+                      </article>
+                      
+                      <InlineEditor
+                        markdown={markdown}
+                        onEdit={handleDocumentEdit}
+                        containerRef={articleRef}
+                        user={user}
+                      />
+                    </div>
+
+                    {/* Right Column - Sticky Dual-View Sync Dashboard */}
+                    {dualView && sourceVideoId && (
+                      <div className="lg:col-span-2 lg:sticky lg:top-4 self-start space-y-4">
+                        <Card className="border-accent/30 bg-background/80 backdrop-blur shadow-lg p-4 rounded-2xl overflow-hidden relative group">
+                          {/* Sync Glow */}
+                          <div className="absolute inset-0 bg-gradient-to-tr from-accent/5 to-transparent pointer-events-none" />
+                          
+                          <div className="flex items-center justify-between mb-3 border-b border-border/40 pb-3">
+                            <div className="flex items-center gap-2">
+                              <span className="relative flex size-2">
+                                <span className="absolute inline-flex h-full w-full rounded-full bg-accent opacity-75 animate-ping"></span>
+                                <span className="relative inline-flex rounded-full size-2 bg-accent"></span>
+                              </span>
+                              <span className="text-xs font-bold uppercase tracking-wider text-foreground">Sync Player</span>
+                            </div>
+                            {currentTime !== null && (
+                              <Badge variant="secondary" className="text-[10px] font-mono bg-accent/10 text-accent hover:bg-accent/15 border border-accent/20">
+                                Active: {formatTimestamp(currentTime)}
+                              </Badge>
+                            )}
+                          </div>
+
+                          {/* YouTube Iframe */}
+                          <div className="aspect-video w-full rounded-xl overflow-hidden bg-black border border-border shadow-inner transition-all duration-300 group-hover:border-accent/40 relative">
+                            <iframe
+                              ref={playerIframeRef}
+                              id="yt-sync-iframe"
+                              src={`https://www.youtube.com/embed/${sourceVideoId}?enablejsapi=1&autoplay=0&rel=0`}
+                              title="Scribe Synchronized Player"
+                              allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                              allowFullScreen
+                              className="w-full h-full"
+                            />
+                          </div>
+
+                          {/* Quick Timestamp Navigation */}
+                          <div className="mt-4 space-y-2">
+                            <div className="flex items-center justify-between">
+                              <span className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">Key Moments Cited</span>
+                              <span className="text-[10px] text-muted-foreground">{uniqueCitations.length} points</span>
+                            </div>
+                            {uniqueCitations.length > 0 ? (
+                              <div className="flex flex-wrap gap-1.5 max-h-[140px] overflow-y-auto pr-1 scrollbar-thin">
+                                {uniqueCitations.map((sec) => (
+                                  <button
+                                    key={sec}
+                                    type="button"
+                                    onClick={() => seekTo(sec)}
+                                    className={`text-[11px] font-semibold px-2.5 py-1.5 rounded-lg border transition-all flex items-center gap-1 ${
+                                      currentTime === sec 
+                                        ? "bg-accent text-accent-foreground border-accent shadow-sm" 
+                                        : "bg-secondary/40 border-border/40 hover:border-accent/30 text-muted-foreground hover:text-foreground"
+                                    }`}
+                                  >
+                                    <span aria-hidden>▶</span> {formatTimestamp(sec)}
+                                  </button>
+                                ))}
+                              </div>
+                            ) : (
+                              <p className="text-[11px] text-muted-foreground italic py-2">
+                                No citations found in this draft.
+                              </p>
+                            )}
+                          </div>
+                        </Card>
                       </div>
                     )}
-                    <article ref={articleRef} className="prose-blog">
-                      <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw]}>{renderedMarkdown}</ReactMarkdown>
-                    </article>
-                    <InlineEditor
-                      markdown={markdown}
-                      onEdit={handleDocumentEdit}
-                      containerRef={articleRef}
-                      user={user}
-                    />
-                  </>
+                  </div>
                 ) : view === "editor" ? (
                   <DocumentEditor
                     markdown={markdown}
