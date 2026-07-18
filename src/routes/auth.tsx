@@ -9,6 +9,16 @@ import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
 
 export const Route = createFileRoute("/auth")({
+  head: () => ({
+    meta: [
+      { title: "Scribe — Log in or sign up" },
+      {
+        name: "description",
+        content: "Log in or sign up to Scribe to start converting YouTube videos to articles.",
+      },
+      { property: "og:title", content: "Scribe — Log in or sign up" },
+    ],
+  }),
   component: AuthPage,
 });
 

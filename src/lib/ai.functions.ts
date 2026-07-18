@@ -44,7 +44,7 @@ function getAiConfig() {
 
   if (openrouterKey) {
     headers["Authorization"] = `Bearer ${openrouterKey}`;
-    headers["HTTP-Referer"] = "http://localhost:8080";
+    headers["HTTP-Referer"] = "http://localhost:3000";
     headers["X-Title"] = "YTBlog Converter";
   } else {
     headers["Authorization"] = `Bearer ${lovableKey}`;

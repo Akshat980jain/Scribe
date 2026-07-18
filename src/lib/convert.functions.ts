@@ -236,7 +236,7 @@ At the end, append a JSON block exactly like this (after the blog content):
       if (openrouterKey) {
         headers["Authorization"] = `Bearer ${openrouterKey}`;
         // Optional headers for OpenRouter rankings
-        headers["HTTP-Referer"] = "http://localhost:8080";
+        headers["HTTP-Referer"] = "http://localhost:3000";
         headers["X-Title"] = "YTBlog Converter";
       } else {
         headers["Authorization"] = `Bearer ${lovableKey}`;

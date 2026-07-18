@@ -16,6 +16,11 @@ export default defineConfig({
       disableCsrfMiddlewareWarning: true,
     },
   },
+  vite: {
+    server: {
+      port: 3000,
+    },
+  },
 });
 
 
